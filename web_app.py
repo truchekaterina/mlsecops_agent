@@ -24,16 +24,20 @@ sys.path.insert(0, str(DIR))
 
 from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
 from auth import login, register, session_from_token  # noqa: E402
-from ledger import snapshot  # noqa: E402
+from cbr_rates import format_rates  # noqa: E402
+from ledger import last_messages, snapshot  # noqa: E402
 from store import DB_PATH  # noqa: E402
-from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase  # noqa: E402
+from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase, set_client  # noqa: E402
 from replies import (  # noqa: E402
     apply_trade_order,
     compose_chat_reply,
     format_account,
     format_buy,
+    format_instruments,
     format_portfolio,
     is_account_question,
+    is_catalog_question,
+    is_fx_question,
     is_portfolio_question,
     parse_trade_command,
 )
@@ -63,8 +67,13 @@ class ChatIn(BaseModel):
 
 
 def _bind_client(session: dict) -> None:
+    set_client(session["email"], session["name"])
     os.environ["STRAZH_CLIENT_EMAIL"] = session["email"]
     os.environ["STRAZH_CLIENT_NAME"] = session["name"]
+
+
+def _fresh_chat(email: str) -> None:
+    _history[email] = []
 
 
 def _is_yes(text: str) -> bool:
@@ -85,6 +94,7 @@ def _pack(session: dict, text: str, tools: list[str]) -> dict:
         "client": {"name": session["name"], "email": session["email"]},
         "account": acc,
         "needs_reserve_confirm": acc.get("pending_reserve"),
+        "inbox": last_messages(session["email"], limit=20),
     }
 
 
@@ -110,7 +120,12 @@ async def index():
 @app.get("/api/me")
 async def me(request: Request):
     s = _bearer(request)
-    return {"name": s["name"], "email": s["email"], "account": snapshot(s["email"])}
+    return {
+        "name": s["name"],
+        "email": s["email"],
+        "account": snapshot(s["email"]),
+        "inbox": last_messages(s["email"], limit=20),
+    }
 
 
 @app.get("/api/account")
@@ -124,6 +139,7 @@ async def api_register(body: RegisterIn):
     try:
         user = register(body.name, body.email, body.password)
         session = login(user["email"], body.password)
+        _fresh_chat(session["email"])
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     resp = JSONResponse(
@@ -142,6 +158,7 @@ async def api_register(body: RegisterIn):
 async def api_login(body: LoginIn):
     try:
         session = login(body.login, body.password)
+        _fresh_chat(session["email"])
     except KeyError:
         raise HTTPException(401, "Нет учётки. Зарегистрируйтесь.") from None
     except PermissionError:
@@ -208,9 +225,22 @@ async def api_chat(body: ChatIn, request: Request):
         hist.append({"role": "user", "content": body.message})
         hist.append({"role": "assistant", "content": text})
         return _pack(session, text, ["get_account"])
+    if is_catalog_question(body.message):
+        text = format_instruments()
+        hist.append({"role": "user", "content": body.message})
+        hist.append({"role": "assistant", "content": text})
+        return _pack(session, text, ["list_instruments"])
+    if is_fx_question(body.message):
+        try:
+            text = format_rates(body.message)
+        except Exception as exc:
+            text = f"Курс ЦБ сейчас недоступен: {exc}"
+        hist.append({"role": "user", "content": body.message})
+        hist.append({"role": "assistant", "content": text})
+        return _pack(session, text, ["cbr_xml_daily"])
     order = parse_trade_command(body.message)
     if order:
-        text, used = apply_trade_order(order, session["email"])
+        text, used = apply_trade_order(order, session["email"], session["name"])
         hist.append({"role": "user", "content": body.message})
         hist.append({"role": "assistant", "content": text})
         return _pack(session, text, used)
@@ -256,6 +286,12 @@ async def api_reserve_deny(request: Request):
     _bind_client(session)
     payload = json.loads(deny_reserve_purchase())
     return _pack(session, payload.get("message") or "Отменено", ["deny_reserve_purchase"])
+
+
+@app.get("/api/inbox")
+async def api_inbox(request: Request):
+    s = _bearer(request)
+    return {"email": s["email"], "messages": last_messages(s["email"], limit=30)}
 
 
 @app.get("/api/health")

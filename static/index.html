@@ -86,6 +86,22 @@
     #ask-box { margin-top: 10px; }
     #ask-box button { margin-top: 0; }
     button.ok { background: var(--ok); }
+    #inbox {
+      margin-top: 16px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+    #inbox h2 { font-size: 1rem; margin: 0 0 8px; }
+    .mail {
+      background: #12181f;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin: 8px 0;
+      white-space: pre-wrap;
+      font-size: 0.88rem;
+    }
+    .mail .meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 6px; }
   </style>
 </head>
 <body>
@@ -101,7 +117,7 @@
         <button type="button" id="tab-reg">Регистрация</button>
         <button type="button" id="tab-login" class="ghost">Вход</button>
       </div>
-      <p class="who">Любой человек создаёт свою учётку. Письма о сделках уйдут на указанную почту (на стенде их ловит MailHog).</p>
+      <p class="who">Свой вход — свой счёт и своя почта. Чужие сделки и письма не видны.</p>
 
       <form id="form-reg">
         <label>Имя</label>
@@ -130,11 +146,9 @@
           <div class="who" id="bal"></div>
         </div>
         <button type="button" class="ghost" id="btn-out">Выйти</button>
-        <a href="http://127.0.0.1:8025" target="_blank" rel="noopener">Почта MailHog</a>
+        <a href="http://127.0.0.1:8025" target="_blank" rel="noopener">Почта Mailpit</a>
       </div>
-      <div id="chat-log">
-        <div class="msg sys">Можно: список акций, состояние счёта, какие куплены, курс ЦБ, купить/продать. Агент сам вызовет MCP. Никуда к брокеру не отсылает.</div>
-      </div>
+      <div id="chat-log"></div>
       <div id="ask-box" class="hidden">
         <div class="who" id="ask-text"></div>
         <div class="row">
@@ -146,6 +160,11 @@
         <input id="q" placeholder="Например: Купи 3 NVDA" autocomplete="off" />
         <button type="submit">Отправить</button>
       </form>
+      <div id="inbox">
+        <h2>Почта</h2>
+        <div class="who">Только письма на ваш адрес регистрации.</div>
+        <div id="inbox-list"></div>
+      </div>
     </section>
   </div>
   <script>
@@ -154,8 +173,15 @@
     const who = document.getElementById("who");
     const bal = document.getElementById("bal");
     const log = document.getElementById("chat-log");
+    const inboxList = document.getElementById("inbox-list");
     const err = document.getElementById("auth-err");
+    const HINT = "Можно: список акций, состояние счёта, какие куплены, курс валют ЦБ, купить/продать.";
     let token = localStorage.getItem("strazh_token") || "";
+    function resetChat() {
+      log.innerHTML = "";
+      addMsg("sys", HINT);
+      inboxList.innerHTML = "";
+    }
     function fmtErr(data, fallback) {
       const d = data && data.detail;
       if (typeof d === "string") return d;
@@ -168,12 +194,39 @@
       const pos = (acc.positions || []).map((p) => p.ticker + " " + p.shares + " шт.").join(", ") || "бумаг нет";
       return "Основной: " + acc.cash_usd + " $ · Резерв: " + acc.reserve_usd + " $ · " + pos;
     }
+    function renderInbox(items) {
+      inboxList.innerHTML = "";
+      if (!items || !items.length) {
+        inboxList.innerHTML = '<div class="who">Писем пока нет.</div>';
+        return;
+      }
+      items.forEach((m) => {
+        const d = document.createElement("div");
+        d.className = "mail";
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = (m.subject || "Письмо") + " → " + m.email + (m.created_at ? " · " + m.created_at : "");
+        d.appendChild(meta);
+        d.appendChild(document.createTextNode(m.body || ""));
+        inboxList.appendChild(d);
+      });
+    }
+    async function loadInbox(items) {
+      if (items) { renderInbox(items); return; }
+      if (!token) return;
+      const r = await fetch("/api/inbox", { headers: { Authorization: "Bearer " + token } });
+      if (!r.ok) return;
+      const data = await r.json();
+      renderInbox(data.messages || []);
+    }
     function showChat(user) {
+      resetChat();
       authBox.classList.add("hidden");
       chatBox.classList.remove("hidden");
-      who.textContent = "Вы вошли: " + user.name + " <" + user.email + ">. Письма → " + user.email;
+      who.textContent = "Вы вошли: " + user.name + " <" + user.email + ">. Письма → Mailpit и блок «Почта».";
       bal.textContent = fmtAcc(user.account);
       refreshAcc();
+      loadInbox(user.inbox);
       showAsk(user.account && user.account.pending_reserve);
     }
     async function refreshAcc() {
@@ -183,6 +236,7 @@
       bal.textContent = fmtAcc(await r.json());
     }
     function showAuth() {
+      resetChat();
       chatBox.classList.add("hidden");
       authBox.classList.remove("hidden");
     }
@@ -298,6 +352,7 @@
       }
       addMsg("agent", data.text, data.tools);
       if (data.account) bal.textContent = fmtAcc(data.account);
+      if (data.inbox) renderInbox(data.inbox);
       showAsk(data.needs_reserve_confirm);
     }
     document.getElementById("btn-yes").onclick = () => sendChat("да");

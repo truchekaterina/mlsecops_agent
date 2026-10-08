@@ -1,4 +1,4 @@
-# Режим A: Ollama на CPU, MailHog, веб-сервис LangChain.
+# Режим A: Ollama на CPU, Mailpit, веб-сервис LangChain.
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $root) { $root = (Get-Location).Path }
 $stand = $PSScriptRoot
@@ -12,11 +12,16 @@ try { chcp 65001 | Out-Null } catch {}
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-$mh = Join-Path $stand "MailHog_windows_amd64.exe"
-if (Test-Path $mh) {
-    Get-Process MailHog_windows_amd64 -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Process -FilePath $mh -WindowStyle Hidden
-    Write-Host "MailHog: http://127.0.0.1:8025  SMTP :1025"
+Get-Process MailHog_windows_amd64, mailpit -ErrorAction SilentlyContinue | Stop-Process -Force
+$mp = Join-Path $stand "mailpit.exe"
+if (Test-Path $mp) {
+    Start-Process -FilePath $mp -ArgumentList @(
+        "--listen", "127.0.0.1:8025",
+        "--smtp", "127.0.0.1:1025",
+        "--disable-version-check",
+        "--quiet"
+    ) -WindowStyle Hidden
+    Write-Host "Mailpit: http://127.0.0.1:8025  SMTP :1025"
 }
 
 if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
@@ -26,6 +31,6 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
 
 Write-Host "Сервис Стража (LangChain create_agent)."
 Write-Host "Откройте в браузере:  http://127.0.0.1:8080"
-Write-Host "Регистрация открыта для любого человека. Письма — на его почту (MailHog)."
+Write-Host "Письма — на почту из регистрации (смотрите Mailpit)."
 Set-Location $stand
 & "$root\.venv\Scripts\python.exe" -m uvicorn web_app:app --host 0.0.0.0 --port 8080

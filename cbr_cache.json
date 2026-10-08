@@ -1,0 +1,384 @@
+{
+  "date": "08.10.2026",
+  "source": "https://www.cbr.ru/scripts/XML_daily.asp",
+  "rows": [
+    {
+      "char_code": "AUD",
+      "name": "Австралийский доллар",
+      "nominal": 1,
+      "value_rub": 59.5803,
+      "unit_rub": 59.5803
+    },
+    {
+      "char_code": "AZN",
+      "name": "Азербайджанский манат",
+      "nominal": 1,
+      "value_rub": 50.283,
+      "unit_rub": 50.283
+    },
+    {
+      "char_code": "DZD",
+      "name": "Алжирских динаров",
+      "nominal": 100,
+      "value_rub": 63.5886,
+      "unit_rub": 0.635886
+    },
+    {
+      "char_code": "GBP",
+      "name": "Фунт стерлингов",
+      "nominal": 1,
+      "value_rub": 113.5104,
+      "unit_rub": 113.5104
+    },
+    {
+      "char_code": "AMD",
+      "name": "Армянских драмов",
+      "nominal": 100,
+      "value_rub": 23.5927,
+      "unit_rub": 0.235927
+    },
+    {
+      "char_code": "BHD",
+      "name": "Бахрейнский динар",
+      "nominal": 1,
+      "value_rub": 227.2942,
+      "unit_rub": 227.2942
+    },
+    {
+      "char_code": "BYN",
+      "name": "Белорусский рубль",
+      "nominal": 1,
+      "value_rub": 27.874,
+      "unit_rub": 27.874
+    },
+    {
+      "char_code": "BOB",
+      "name": "Боливиано",
+      "nominal": 10,
+      "value_rub": 71.4128,
+      "unit_rub": 7.14128
+    },
+    {
+      "char_code": "BRL",
+      "name": "Бразильский реал",
+      "nominal": 1,
+      "value_rub": 17.2011,
+      "unit_rub": 17.2011
+    },
+    {
+      "char_code": "HUF",
+      "name": "Форинтов",
+      "nominal": 100,
+      "value_rub": 26.0995,
+      "unit_rub": 0.260995
+    },
+    {
+      "char_code": "VND",
+      "name": "Донгов",
+      "nominal": 10000,
+      "value_rub": 33.3416,
+      "unit_rub": 0.00333416
+    },
+    {
+      "char_code": "HKD",
+      "name": "Гонконгский доллар",
+      "nominal": 1,
+      "value_rub": 10.89,
+      "unit_rub": 10.89
+    },
+    {
+      "char_code": "GEL",
+      "name": "Лари",
+      "nominal": 1,
+      "value_rub": 32.8458,
+      "unit_rub": 32.8458
+    },
+    {
+      "char_code": "DKK",
+      "name": "Датская крона",
+      "nominal": 1,
+      "value_rub": 12.8872,
+      "unit_rub": 12.8872
+    },
+    {
+      "char_code": "AED",
+      "name": "Дирхам ОАЭ",
+      "nominal": 1,
+      "value_rub": 23.276,
+      "unit_rub": 23.276
+    },
+    {
+      "char_code": "USD",
+      "name": "Доллар США",
+      "nominal": 1,
+      "value_rub": 85.4811,
+      "unit_rub": 85.4811
+    },
+    {
+      "char_code": "EUR",
+      "name": "Евро",
+      "nominal": 1,
+      "value_rub": 96.3287,
+      "unit_rub": 96.3287
+    },
+    {
+      "char_code": "EGP",
+      "name": "Египетских фунтов",
+      "nominal": 10,
+      "value_rub": 16.3162,
+      "unit_rub": 1.63162
+    },
+    {
+      "char_code": "INR",
+      "name": "Индийских рупий",
+      "nominal": 100,
+      "value_rub": 88.4687,
+      "unit_rub": 0.884687
+    },
+    {
+      "char_code": "IDR",
+      "name": "Рупий",
+      "nominal": 10000,
+      "value_rub": 47.7281,
+      "unit_rub": 0.00477281
+    },
+    {
+      "char_code": "IRR",
+      "name": "Иранских риалов",
+      "nominal": 1000000,
+      "value_rub": 48.4195,
+      "unit_rub": 4.84195e-05
+    },
+    {
+      "char_code": "KZT",
+      "name": "Тенге",
+      "nominal": 100,
+      "value_rub": 18.843,
+      "unit_rub": 0.18843
+    },
+    {
+      "char_code": "CAD",
+      "name": "Канадский доллар",
+      "nominal": 1,
+      "value_rub": 60.0879,
+      "unit_rub": 60.0879
+    },
+    {
+      "char_code": "QAR",
+      "name": "Катарский риал",
+      "nominal": 1,
+      "value_rub": 23.4838,
+      "unit_rub": 23.4838
+    },
+    {
+      "char_code": "KGS",
+      "name": "Сомов",
+      "nominal": 100,
+      "value_rub": 97.7502,
+      "unit_rub": 0.977502
+    },
+    {
+      "char_code": "CNY",
+      "name": "Юань",
+      "nominal": 1,
+      "value_rub": 12.7516,
+      "unit_rub": 12.7516
+    },
+    {
+      "char_code": "CUP",
+      "name": "Кубинских песо",
+      "nominal": 10,
+      "value_rub": 35.7132,
+      "unit_rub": 3.57132
+    },
+    {
+      "char_code": "MDL",
+      "name": "Молдавских леев",
+      "nominal": 10,
+      "value_rub": 47.9595,
+      "unit_rub": 4.79595
+    },
+    {
+      "char_code": "MNT",
+      "name": "Тугриков",
+      "nominal": 1000,
+      "value_rub": 23.7738,
+      "unit_rub": 0.0237738
+    },
+    {
+      "char_code": "NGN",
+      "name": "Найр",
+      "nominal": 1000,
+      "value_rub": 64.2293,
+      "unit_rub": 0.0642293
+    },
+    {
+      "char_code": "NZD",
+      "name": "Новозеландский доллар",
+      "nominal": 1,
+      "value_rub": 48.019,
+      "unit_rub": 48.019
+    },
+    {
+      "char_code": "NOK",
+      "name": "Норвежских крон",
+      "nominal": 10,
+      "value_rub": 89.3752,
+      "unit_rub": 8.93752
+    },
+    {
+      "char_code": "OMR",
+      "name": "Оманский риал",
+      "nominal": 1,
+      "value_rub": 222.3176,
+      "unit_rub": 222.3176
+    },
+    {
+      "char_code": "PLN",
+      "name": "Злотый",
+      "nominal": 1,
+      "value_rub": 21.856,
+      "unit_rub": 21.856
+    },
+    {
+      "char_code": "SAR",
+      "name": "Саудовский риял",
+      "nominal": 1,
+      "value_rub": 22.795,
+      "unit_rub": 22.795
+    },
+    {
+      "char_code": "RON",
+      "name": "Румынский лей",
+      "nominal": 1,
+      "value_rub": 17.8827,
+      "unit_rub": 17.8827
+    },
+    {
+      "char_code": "XDR",
+      "name": "СДР (специальные права заимствования)",
+      "nominal": 1,
+      "value_rub": 115.791,
+      "unit_rub": 115.791
+    },
+    {
+      "char_code": "SGD",
+      "name": "Сингапурский доллар",
+      "nominal": 1,
+      "value_rub": 66.8395,
+      "unit_rub": 66.8395
+    },
+    {
+      "char_code": "TJS",
+      "name": "Сомони",
+      "nominal": 10,
+      "value_rub": 92.6032,
+      "unit_rub": 9.26032
+    },
+    {
+      "char_code": "THB",
+      "name": "Батов",
+      "nominal": 10,
+      "value_rub": 25.3939,
+      "unit_rub": 2.53939
+    },
+    {
+      "char_code": "BDT",
+      "name": "Так",
+      "nominal": 100,
+      "value_rub": 69.4571,
+      "unit_rub": 0.694571
+    },
+    {
+      "char_code": "TRY",
+      "name": "Турецких лир",
+      "nominal": 10,
+      "value_rub": 17.3968,
+      "unit_rub": 1.73968
+    },
+    {
+      "char_code": "TMT",
+      "name": "Новый туркменский манат",
+      "nominal": 1,
+      "value_rub": 24.4232,
+      "unit_rub": 24.4232
+    },
+    {
+      "char_code": "UZS",
+      "name": "Узбекских сумов",
+      "nominal": 10000,
+      "value_rub": 72.4982,
+      "unit_rub": 0.00724982
+    },
+    {
+      "char_code": "UAH",
+      "name": "Гривен",
+      "nominal": 10,
+      "value_rub": 19.0534,
+      "unit_rub": 1.90534
+    },
+    {
+      "char_code": "CZK",
+      "name": "Чешских крон",
+      "nominal": 10,
+      "value_rub": 39.1021,
+      "unit_rub": 3.91021
+    },
+    {
+      "char_code": "SEK",
+      "name": "Шведских крон",
+      "nominal": 10,
+      "value_rub": 85.6826,
+      "unit_rub": 8.56826
+    },
+    {
+      "char_code": "CHF",
+      "name": "Швейцарский франк",
+      "nominal": 1,
+      "value_rub": 102.5937,
+      "unit_rub": 102.5937
+    },
+    {
+      "char_code": "ETB",
+      "name": "Эфиопских быров",
+      "nominal": 100,
+      "value_rub": 53.0977,
+      "unit_rub": 0.530977
+    },
+    {
+      "char_code": "RSD",
+      "name": "Сербских динаров",
+      "nominal": 100,
+      "value_rub": 81.7906,
+      "unit_rub": 0.817906
+    },
+    {
+      "char_code": "ZAR",
+      "name": "Рэндов",
+      "nominal": 10,
+      "value_rub": 51.4519,
+      "unit_rub": 5.14519
+    },
+    {
+      "char_code": "KRW",
+      "name": "Вон",
+      "nominal": 1000,
+      "value_rub": 63.6304,
+      "unit_rub": 0.0636304
+    },
+    {
+      "char_code": "JPY",
+      "name": "Иен",
+      "nominal": 100,
+      "value_rub": 53.9449,
+      "unit_rub": 0.539449
+    },
+    {
+      "char_code": "MMK",
+      "name": "Кьятов",
+      "nominal": 1000,
+      "value_rub": 40.7053,
+      "unit_rub": 0.0407053
+    }
+  ]
+}

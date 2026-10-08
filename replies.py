@@ -75,7 +75,7 @@ def format_sell(payload: dict, snap: dict, email: str) -> str:
         f"Осталось {ticker}: {left} шт.\n"
         f"Ваш текущий остаток на основном счёте составляет ${snap.get('cash_usd')}, "
         f"а резерв в размере ${snap.get('reserve_usd')}.\n"
-        f"Письмо «Продано» отправлено на {email} (смотрите MailHog)."
+        f"Письмо «Продано» отправлено на {email} (Mailpit и почта на странице)."
     )
 
 
@@ -86,7 +86,7 @@ def format_buy(payload: dict, snap: dict, email: str | None = None) -> str:
         extra = f" С резерва снято {reserved} $."
     mail = ""
     if email:
-        mail = f"\nПисьмо «Куплено» отправлено на {email} (смотрите MailHog)."
+        mail = f"\nПисьмо «Куплено» отправлено на {email} (Mailpit и почта на странице)."
     return (
         f"Вы купили {payload.get('shares')} акцию {payload.get('ticker')}. "
         f"Стоимость покупки составила ${payload.get('usd_amount')}.{extra}\n"
@@ -119,6 +119,37 @@ def is_portfolio_question(text: str) -> bool:
 def is_account_question(text: str) -> bool:
     t = text.lower()
     return any(x in t for x in ("состояни", "сколько денег", "баланс", "остаток", "на счёт", "на счет", "резерв сколько"))
+
+
+def is_catalog_question(text: str) -> bool:
+    t = text.lower()
+    return any(
+        x in t
+        for x in (
+            "список акци",
+            "какие акции можно",
+            "какие акции я могу",
+            "доступн",
+            "для покупк",
+            "каталог",
+        )
+    )
+
+
+def is_fx_question(text: str) -> bool:
+    t = text.lower()
+    if is_trade_request(t) or is_catalog_question(t):
+        return False
+    return any(x in t for x in ("курс", "валют", "цб", "доллар", "евро", "юан"))
+
+
+def format_instruments() -> str:
+    from ledger import INSTRUMENTS
+
+    lines = ["Доступные для покупки акции:"]
+    for ticker, meta in INSTRUMENTS.items():
+        lines.append(f"- {meta['name']} ({ticker}): ${meta['price_usd']}")
+    return "\n".join(lines)
 
 
 def is_trade_request(text: str) -> bool:
@@ -215,10 +246,11 @@ def format_trade_result(payload: dict, email: str) -> str:
     return payload.get("message") or str(payload)
 
 
-def apply_trade_order(order: dict, email: str) -> tuple[str, list[str]]:
+def apply_trade_order(order: dict, email: str, name: str = "") -> tuple[str, list[str]]:
     """Купить/продать без модели: тот же execute_buy / execute_sell."""
-    from mcp_strazh import execute_buy, execute_sell
+    from mcp_strazh import execute_buy, execute_sell, set_client
 
+    set_client(email, name)
     if not order.get("ticker"):
         return (
             "Не понял, какую бумагу купить или продать. "

@@ -8,6 +8,8 @@ strazh.db
 strazh.db-wal
 strazh.db-shm
 MailHog_windows_amd64.exe
+mailpit.exe
+mailpit-windows-amd64.zip
 __pycache__/
 *.pyc
 .venv/

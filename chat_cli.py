@@ -13,15 +13,19 @@ import json  # noqa: E402
 
 from auth import login, register, require_session  # noqa: E402
 from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
+from cbr_rates import format_rates  # noqa: E402
 from ledger import snapshot  # noqa: E402
-from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase  # noqa: E402
+from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase, set_client  # noqa: E402
 from replies import (  # noqa: E402
     apply_trade_order,
     compose_chat_reply,
     format_account,
     format_buy,
+    format_instruments,
     format_portfolio,
     is_account_question,
+    is_catalog_question,
+    is_fx_question,
     is_portfolio_question,
     parse_trade_command,
 )
@@ -42,7 +46,7 @@ def _ask(prompt: str, secret: bool = False) -> str:
 
 def authorize() -> dict:
     print("Вход в учебный стенд «Страж». Без логина чат закрыт.")
-    print("Письма о сделках уйдут на почту из учётки (смотрите MailHog).")
+    print("Письма о сделках уйдут на почту из учётки (смотрите Mailpit).")
     print("Готовые входы: client@demo / demo   или   katya@demo / katya")
     print("Нет учётки — оставьте пароль пустым и зарегистрируйтесь.")
     print()
@@ -86,11 +90,12 @@ async def main() -> None:
     _fix_stdio()
     session = authorize()
     session = require_session(session)
+    set_client(session["email"], session["name"])
     os.environ["STRAZH_CLIENT_EMAIL"] = session["email"]
     os.environ["STRAZH_CLIENT_NAME"] = session["name"]
     print()
     print(f"Вошли: {session['name']} <{session['email']}>")
-    print("Письма о покупке/продаже: на эту почту → http://127.0.0.1:8025")
+    print("Письма о покупке/продаже: Mailpit → http://127.0.0.1:8025")
     print("Режим A — без защиты. Модель думает, тулы жмутся.")
     print("Выход: пустая строка или Ctrl+C.")
     print("Собираю агент и MCP (ЦБ + strazh)...")
@@ -129,9 +134,20 @@ async def main() -> None:
             print("Агент:", format_account(snapshot(session["email"])))
             print()
             continue
+        if is_catalog_question(text):
+            print("Агент:", format_instruments())
+            print()
+            continue
+        if is_fx_question(text):
+            try:
+                print("Агент:", format_rates(text))
+            except Exception as exc:
+                print("Агент: курс ЦБ недоступен:", exc)
+            print()
+            continue
         order = parse_trade_command(text)
         if order:
-            reply, _used = apply_trade_order(order, session["email"])
+            reply, _used = apply_trade_order(order, session["email"], session["name"])
             print("Агент:", reply)
             print()
             continue

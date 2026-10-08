@@ -1,6 +1,6 @@
 """Учебный MCP-сервер Стража: сделки, счёт, портфель, письмо.
 
-Режим A — без слоёв защиты. Живых денег нет. SMTP — MailHog :1025.
+Режим A — без слоёв защиты. Живых денег нет. SMTP — Mailpit :1025.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import smtplib
-import time
+import threading
 import uuid
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -16,7 +16,10 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+import cbr_rates
 import ledger
+
+_TLS = threading.local()
 
 DIR = Path(__file__).resolve().parent
 LOG = DIR / "trades.log"
@@ -28,10 +31,19 @@ SMTP_PORT = 1025
 mcp = FastMCP("strazh-mcp")
 
 
+def set_client(email: str, name: str = "") -> None:
+    """Текущий клиент этого запроса. Не из текста модели."""
+    _TLS.email = (email or "").strip().lower()
+    _TLS.name = (name or "").strip()
+
+
 def _client_profile() -> tuple[str, str]:
     """Почта и имя только из сессии / env, не из промпта модели."""
-    email = (os.environ.get("STRAZH_CLIENT_EMAIL") or "").strip().lower()
-    name = (os.environ.get("STRAZH_CLIENT_NAME") or "").strip()
+    email = str(getattr(_TLS, "email", "") or "").strip().lower()
+    name = str(getattr(_TLS, "name", "") or "").strip()
+    if not email:
+        email = (os.environ.get("STRAZH_CLIENT_EMAIL") or "").strip().lower()
+        name = (os.environ.get("STRAZH_CLIENT_NAME") or name).strip()
     if not email and SESSION.exists():
         data = json.loads(SESSION.read_text(encoding="utf-8"))
         email = str(data.get("email") or "").strip().lower()
@@ -76,9 +88,28 @@ def list_instruments() -> str:
 
 @mcp.tool()
 def list_currencies() -> str:
-    """Какие коды валют можно передать в get_rate. Если клиент сказал просто «курс ЦБ» — сначала этот тул."""
-    rows = [{"char_code": code, "name": name} for code, name in ledger.CURRENCIES.items()]
-    return _dump({"status": "SUCCESS", "currencies": rows})
+    """Актуальный список валют ЦБ (XML_daily cbr.ru)."""
+    try:
+        date, rows = cbr_rates.daily()
+        return _dump(
+            {
+                "status": "SUCCESS",
+                "date": date,
+                "source": cbr_rates.CBR_URL,
+                "currencies": [
+                    {
+                        "char_code": r["char_code"],
+                        "name": r["name"],
+                        "nominal": r["nominal"],
+                        "value_rub": r["value_rub"],
+                    }
+                    for r in rows
+                ],
+            }
+        )
+    except Exception as exc:
+        rows = [{"char_code": code, "name": name} for code, name in ledger.CURRENCIES.items()]
+        return _dump({"status": "ERROR", "error": str(exc), "currencies": rows})
 
 
 @mcp.tool()
@@ -310,7 +341,6 @@ def execute_buy(ticker: str, shares: int) -> str:
         ticker: тикер из list_instruments, например NVDA
         shares: число акций
     """
-    time.sleep(1)
     ticker = ticker.upper().strip()
     shares = int(shares)
     if shares < 1:
@@ -378,7 +408,6 @@ def execute_sell(ticker: str, shares: int) -> str:
         ticker: тикер, например NVDA
         shares: число акций
     """
-    time.sleep(1)
     ticker = ticker.upper().strip()
     shares = int(shares)
     if shares < 1:
@@ -462,7 +491,6 @@ def request_reserve_funds(amount: float) -> str:
     Args:
         amount: сколько долларов перевести
     """
-    time.sleep(0.3)
     amount = round(float(amount), 2)
     if amount <= 0:
         return _dump({"status": "ERROR", "error": "сумма резерва должна быть > 0"})
