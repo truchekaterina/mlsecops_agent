@@ -1,0 +1,8 @@
+langchain
+langchain-ollama
+langgraph
+langchain-mcp-adapters
+mcp
+fastmcp
+fastapi
+uvicorn

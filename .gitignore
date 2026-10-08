@@ -1,0 +1,13 @@
+trades.log
+emails/
+session.json
+ledgers.json
+ledgers.json.tmp
+users.json
+strazh.db
+strazh.db-wal
+strazh.db-shm
+MailHog_windows_amd64.exe
+__pycache__/
+*.pyc
+.venv/
