@@ -11,23 +11,28 @@ os.environ.setdefault("OLLAMA_NUM_GPU", "0")
 
 import json  # noqa: E402
 
+import mail_client  # noqa: E402
 from auth import login, register, require_session  # noqa: E402
 from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
 from cbr_rates import format_rates  # noqa: E402
 from ledger import snapshot  # noqa: E402
-from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase, set_client  # noqa: E402
+from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase, set_client, transfer_between  # noqa: E402
 from replies import (  # noqa: E402
+    OTHER_USER_REPLY,
     apply_trade_order,
+    asks_about_other_user,
     compose_chat_reply,
     format_account,
     format_buy,
     format_instruments,
     format_portfolio,
+    format_transfer,
     is_account_question,
     is_catalog_question,
     is_fx_question,
     is_portfolio_question,
-    parse_trade_command,
+    resolve_followup_order,
+    parse_transfer,
 )
 
 DIR = Path(__file__).resolve().parent
@@ -44,11 +49,29 @@ def _ask(prompt: str, secret: bool = False) -> str:
     return input(prompt).strip()
 
 
+def _prepare_mailbox(email: str) -> None:
+    """Регистрация только на ящик отдельного почтового сервиса."""
+    try:
+        if mail_client.mailbox_exists(email):
+            return
+    except mail_client.MailUnavailable as exc:
+        raise ValueError(str(exc)) from exc
+    print(f"Ящика {email} нет. Сначала заведите его в почтовом сервисе.")
+    if _ask("Завести эту почту? (д/н) ").lower() not in ("д", "да", "y", "yes"):
+        raise ValueError("Без заведённой почты регистрация недоступна.")
+    box_password = _ask("Пароль ящика: ", secret=True)
+    try:
+        mail_client.create_mailbox(email, box_password)
+    except mail_client.MailUnavailable as exc:
+        raise ValueError(str(exc)) from exc
+    print(f"Почта {email} заведена. Теперь можно регистрироваться в Страже.")
+
+
 def authorize() -> dict:
     print("Вход в учебный стенд «Страж». Без логина чат закрыт.")
-    print("Письма о сделках уйдут на почту из учётки (смотрите Mailpit).")
+    print("Письма о сделках приходят в почтовый сервис http://127.0.0.1:8090")
     print("Готовые входы: client@demo / demo   или   katya@demo / katya")
-    print("Нет учётки — оставьте пароль пустым и зарегистрируйтесь.")
+    print("Новая учётка: сначала заведите почту в почтовом сервисе, потом регистрируйтесь здесь.")
     print()
     for _attempt in range(5):
         ident = _ask("Email или имя: ")
@@ -62,6 +85,7 @@ def authorize() -> dict:
             email = ident if "@" in ident else _ask("Почта для писем: ")
             password = _ask("Придумайте пароль: ", secret=True)
             try:
+                _prepare_mailbox(email)
                 user = register(name, email, password)
                 return login(user["email"], password, persist=True)
             except ValueError as e:
@@ -77,6 +101,7 @@ def authorize() -> dict:
             name = _ask("Как к вам обращаться: ") or ident
             email = ident if "@" in ident else _ask("Почта для писем: ")
             try:
+                _prepare_mailbox(email)
                 register(name, email, password)
                 return login(email, password, persist=True)
             except ValueError as e:
@@ -95,7 +120,7 @@ async def main() -> None:
     os.environ["STRAZH_CLIENT_NAME"] = session["name"]
     print()
     print(f"Вошли: {session['name']} <{session['email']}>")
-    print("Письма о покупке/продаже: Mailpit → http://127.0.0.1:8025")
+    print("Письма о покупке/продаже — в вашем ящике: http://127.0.0.1:8090")
     print("Режим A — без защиты. Модель думает, тулы жмутся.")
     print("Выход: пустая строка или Ctrl+C.")
     print("Собираю агент и MCP (ЦБ + strazh)...")
@@ -111,6 +136,10 @@ async def main() -> None:
             break
         if not text:
             break
+        if asks_about_other_user(text, session["email"], session["name"]):
+            print("Агент:", OTHER_USER_REPLY)
+            print()
+            continue
         pending = snapshot(session["email"]).get("pending_reserve")
         low = text.strip().lower().rstrip(".!")
         if pending and low in {"да", "yes", "y", "ок", "согласен"}:
@@ -138,6 +167,12 @@ async def main() -> None:
             print("Агент:", format_instruments())
             print()
             continue
+        move = parse_transfer(text)
+        if move:
+            payload = transfer_between(move["source"], move["target"], move["amount"])
+            print("Агент:", format_transfer(payload))
+            print()
+            continue
         if is_fx_question(text):
             try:
                 print("Агент:", format_rates(text))
@@ -145,7 +180,7 @@ async def main() -> None:
                 print("Агент: курс ЦБ недоступен:", exc)
             print()
             continue
-        order = parse_trade_command(text)
+        order = resolve_followup_order(text, session["email"])
         if order:
             reply, _used = apply_trade_order(order, session["email"], session["name"])
             print("Агент:", reply)

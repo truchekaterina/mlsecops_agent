@@ -16,7 +16,8 @@ sys.path.insert(0, str(DIR))
 import mcp_strazh as tools  # noqa: E402
 from agent_mode_a import build_agent, last_text  # noqa: E402
 from auth import decode_jwt, load_store, login  # noqa: E402
-from ledger import clear_history, last_messages, reset_book, snapshot  # noqa: E402
+from ledger import clear_history, reset_book, snapshot  # noqa: E402
+from mail_store import list_messages  # noqa: E402
 from replies import compose_chat_reply, parse_trade_command  # noqa: E402
 
 LOG = DIR / "trades.log"
@@ -94,10 +95,10 @@ def check_direct_tools() -> None:
             rub_amount="",
         )
     )
-    assert mail["status"] in ("SUCCESS", "SAVED_DB_ONLY"), mail
+    assert mail["status"] == "SUCCESS", mail
     assert mail.get("to") == "client@demo", mail
     assert mail.get("message_id"), mail
-    saved = last_messages("client@demo")
+    saved = list_messages("client@demo")
     assert saved and saved[0]["email"] == "client@demo", saved
     kinds = _kinds()
     assert "BUY" in kinds and "SELL" in kinds and "RESERVE_ASK" in kinds and "ACCOUNT" in kinds, kinds

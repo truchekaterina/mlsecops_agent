@@ -1,32 +1,28 @@
 """Учебный MCP-сервер Стража: сделки, счёт, портфель, письмо.
 
-Режим A — без слоёв защиты. Живых денег нет. SMTP — Mailpit :1025.
+Режим A — без слоёв защиты. Живых денег нет. Письма — почтовый сервис :8090.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import smtplib
 import threading
 import uuid
 from datetime import datetime, timezone
-from email.message import EmailMessage
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 import cbr_rates
 import ledger
+import mail_client
 
 _TLS = threading.local()
 
 DIR = Path(__file__).resolve().parent
 LOG = DIR / "trades.log"
 SESSION = DIR / "session.json"
-
-SMTP_HOST = "127.0.0.1"
-SMTP_PORT = 1025
 
 mcp = FastMCP("strazh-mcp")
 
@@ -484,64 +480,142 @@ def execute_sell(ticker: str, shares: int) -> str:
     )
 
 
-@mcp.tool()
-def request_reserve_funds(amount: float) -> str:
-    """Перевести сумму с резервного счёта на основной. В режиме A без подтверждения клиента.
+def _bucket(name: str) -> str | None:
+    t = (name or "").strip().lower().replace("ё", "е")
+    if t in {"cash", "main", "основной", "основного", "основном", "cash_usd"}:
+        return "cash_usd"
+    if t in {"reserve", "резерв", "резерва", "резервный", "reserve_usd"}:
+        return "reserve_usd"
+    return None
 
-    Args:
-        amount: сколько долларов перевести
-    """
+
+def transfer_between(source: str, target: str, amount: float) -> dict:
+    """Перевод между основным и резервом. Проверка денег внутри записи счёта."""
+    src = _bucket(source)
+    dst = _bucket(target)
     amount = round(float(amount), 2)
+    if src is None or dst is None:
+        return {"status": "ERROR", "error": "счёт: cash/основной или reserve/резерв"}
+    if src == dst:
+        return {"status": "ERROR", "error": "нельзя перевести на тот же счёт"}
     if amount <= 0:
-        return _dump({"status": "ERROR", "error": "сумма резерва должна быть > 0"})
+        return {"status": "ERROR", "error": "сумма перевода должна быть > 0"}
     email, _name = _client_profile()
-    book = ledger.get_book(email)
-    if book["reserve_usd"] + 1e-9 < amount:
-        return _dump(
-            {
-                "status": "ERROR",
-                "error": "недостаточно денег на резервном счёте",
-                "reserve_usd": book["reserve_usd"],
-                "want": amount,
-            }
-        )
+    label = {"cash_usd": "основном счёте", "reserve_usd": "резервном счёте"}
 
-    def _res(b: dict) -> dict:
-        b["reserve_usd"] = round(b["reserve_usd"] - amount, 2)
-        b["cash_usd"] = round(b["cash_usd"] + amount, 2)
+    def _move(b: dict) -> dict:
+        if float(b[src]) + 1e-9 < amount:
+            raise ValueError(label[src])
+        b[src] = round(float(b[src]) - amount, 2)
+        b[dst] = round(float(b[dst]) + amount, 2)
         return b
 
-    after = ledger.update_book(email, _res)
-    cid = _new_id("RES")
+    try:
+        after = ledger.update_book(email, _move)
+    except ValueError as exc:
+        fresh = ledger.get_book(email)
+        return {
+            "status": "ERROR",
+            "error": f"недостаточно денег на {exc}",
+            "cash_usd": fresh["cash_usd"],
+            "reserve_usd": fresh["reserve_usd"],
+            "want": amount,
+        }
+    cid = _new_id("XFR")
+    src_name = "cash" if src == "cash_usd" else "reserve"
+    dst_name = "cash" if dst == "cash_usd" else "reserve"
+    kind = "TO_CASH" if dst == "cash_usd" else "TO_RESERVE"
     _log(
-        "RESERVE",
+        kind,
         {
             "amount": amount,
             "confirmation_id": cid,
             "client": email,
+            "from": src_name,
+            "to": dst_name,
             "cash_usd": after["cash_usd"],
             "reserve_usd": after["reserve_usd"],
         },
     )
     ledger.record_trade(
         email=email,
-        kind="RESERVE",
+        kind=kind,
         confirmation_id=cid,
         usd_amount=amount,
-        reserved_usd=amount,
+        reserved_usd=amount if src == "reserve_usd" else 0,
         cash_usd=after["cash_usd"],
         reserve_usd=after["reserve_usd"],
     )
-    return _dump(
-        {
-            "status": "SUCCESS",
-            "transferred": amount,
-            "from": "reserve",
-            "confirmation_id": cid,
-            "cash_usd": after["cash_usd"],
-            "reserve_usd": after["reserve_usd"],
-        }
+    mail_ok, mail_error = _mail_transfer(
+        email=email,
+        name=_name,
+        amount=amount,
+        src_name=src_name,
+        dst_name=dst_name,
+        confirmation_id=cid,
+        cash_usd=after["cash_usd"],
+        reserve_usd=after["reserve_usd"],
     )
+    return {
+        "status": "SUCCESS",
+        "transferred": amount,
+        "from": src_name,
+        "to": dst_name,
+        "confirmation_id": cid,
+        "cash_usd": after["cash_usd"],
+        "reserve_usd": after["reserve_usd"],
+        "email_to": email,
+        "mail_ok": mail_ok,
+        "mail_error": mail_error,
+    }
+
+
+def _mail_transfer(
+    *,
+    email: str,
+    name: str,
+    amount: float,
+    src_name: str,
+    dst_name: str,
+    confirmation_id: str,
+    cash_usd: float,
+    reserve_usd: float,
+) -> tuple[bool, str]:
+    src = "основного счёта" if src_name == "cash" else "резерва"
+    dst = "основной счёт" if dst_name == "cash" else "резерв"
+    subject = "Перевод между счетами"
+    body = (
+        f"Здравствуйте, {name or 'Клиент'}.\n\n"
+        f"Переведено {amount} $ с {src} на {dst}.\n"
+        f"Основной счёт: {cash_usd} $\n"
+        f"Резерв: {reserve_usd} $\n"
+        f"Номер подтверждения: {confirmation_id}\n"
+        "Это учебное письмо, живых денег нет.\n"
+    )
+    try:
+        mail_client.deliver(
+            email=email,
+            subject=subject,
+            body=body,
+            confirmation_id=confirmation_id,
+            side="TRANSFER",
+            ticker="",
+        )
+    except (mail_client.MailUnavailable, ValueError) as exc:
+        _log("EMAIL", {"to": email, "side": "TRANSFER", "confirmation_id": confirmation_id, "ok": False, "error": str(exc)})
+        return False, str(exc)
+    _log("EMAIL", {"to": email, "side": "TRANSFER", "confirmation_id": confirmation_id, "ok": True})
+    return True, ""
+
+
+@mcp.tool()
+def request_reserve_funds(amount: float) -> str:
+    """Перевести сумму с резервного счёта на основной.
+
+    Args:
+        amount: сколько долларов перевести
+    """
+    return _dump(transfer_between("reserve", "cash", amount))
 
 
 @mcp.tool()
@@ -575,30 +649,30 @@ def send_trade_email(
         f"Номер подтверждения: {confirmation_id}\n"
         "Это учебное письмо, живых денег нет.\n"
     )
-    msg = EmailMessage()
-    msg["From"] = "strazh@local"
-    msg["To"] = to
-    msg["Subject"] = f"{title} {ticker}"
-    msg.set_content(body)
-    smtp_ok = False
-    smtp_err = ""
+    subject = f"{title} {ticker}"
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=3) as s:
-            s.send_message(msg)
-        smtp_ok = True
-    except OSError as e:
-        smtp_err = str(e)
-
-    mid = ledger.record_message(
-        email=to,
-        confirmation_id=confirmation_id,
-        side=side_u,
-        ticker=ticker,
-        subject=f"{title} {ticker}",
-        body=body,
-        smtp_ok=smtp_ok,
-        smtp_error=smtp_err,
-    )
+        saved = mail_client.deliver(
+            email=to,
+            subject=subject,
+            body=body,
+            confirmation_id=confirmation_id,
+            side=side_u,
+            ticker=ticker,
+        )
+    except (mail_client.MailUnavailable, ValueError) as exc:
+        _log(
+            "EMAIL",
+            {
+                "to": to,
+                "side": side_u,
+                "ticker": ticker,
+                "confirmation_id": confirmation_id,
+                "ok": False,
+                "error": str(exc),
+            },
+        )
+        return _dump({"status": "ERROR", "to": to, "error": str(exc)})
+    mid = int(saved["id"])
     _log(
         "EMAIL",
         {
@@ -606,19 +680,11 @@ def send_trade_email(
             "side": side_u,
             "ticker": ticker,
             "confirmation_id": confirmation_id,
-            "smtp_ok": smtp_ok,
+            "ok": True,
             "message_id": mid,
         },
     )
-    return _dump(
-        {
-            "status": "SUCCESS" if smtp_ok else "SAVED_DB_ONLY",
-            "to": to,
-            "smtp_ok": smtp_ok,
-            "smtp_error": smtp_err,
-            "message_id": mid,
-        }
-    )
+    return _dump({"status": "SUCCESS", "to": to, "message_id": mid})
 
 
 if __name__ == "__main__":

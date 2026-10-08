@@ -1,4 +1,4 @@
-# Режим A: Ollama на CPU, Mailpit, веб-сервис LangChain.
+# Режим A: Ollama на CPU, почтовый сервис, веб-сервис LangChain.
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $root) { $root = (Get-Location).Path }
 $stand = $PSScriptRoot
@@ -12,17 +12,11 @@ try { chcp 65001 | Out-Null } catch {}
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-Get-Process MailHog_windows_amd64, mailpit -ErrorAction SilentlyContinue | Stop-Process -Force
-$mp = Join-Path $stand "mailpit.exe"
-if (Test-Path $mp) {
-    Start-Process -FilePath $mp -ArgumentList @(
-        "--listen", "127.0.0.1:8025",
-        "--smtp", "127.0.0.1:1025",
-        "--disable-version-check",
-        "--quiet"
-    ) -WindowStyle Hidden
-    Write-Host "Mailpit: http://127.0.0.1:8025  SMTP :1025"
-}
+$python = Join-Path $root ".venv\Scripts\python.exe"
+Start-Process -FilePath $python -ArgumentList @(
+    "-m", "uvicorn", "mail_app:app", "--host", "127.0.0.1", "--port", "8090"
+) -WorkingDirectory $stand -WindowStyle Hidden
+Write-Host "Почта:   http://127.0.0.1:8090"
 
 if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath "$ollamaDir\ollama.exe" -ArgumentList "serve" -WindowStyle Hidden
@@ -31,6 +25,6 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
 
 Write-Host "Сервис Стража (LangChain create_agent)."
 Write-Host "Откройте в браузере:  http://127.0.0.1:8080"
-Write-Host "Письма — на почту из регистрации (смотрите Mailpit)."
+Write-Host "Сначала ящик на :8090, потом регистрация в Страже на эту почту."
 Set-Location $stand
-& "$root\.venv\Scripts\python.exe" -m uvicorn web_app:app --host 0.0.0.0 --port 8080
+& $python -m uvicorn web_app:app --host 0.0.0.0 --port 8080

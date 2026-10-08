@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Почта</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a222c;
+      --line: #2c3a48;
+      --text: #e8eef4;
+      --muted: #8aa0b5;
+      --acc: #3d9cf0;
+      --ok: #3ecf8e;
+      --err: #f07178;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 1.4rem; margin: 0 0 6px; }
+    .sub { color: var(--muted); font-size: 0.92rem; margin-bottom: 20px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 20px;
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 6px; }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #12181f;
+      color: var(--text);
+      font-size: 1rem;
+    }
+    button {
+      margin-top: 16px;
+      background: var(--acc);
+      color: #041018;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .err { color: var(--err); min-height: 1.2em; margin-top: 8px; }
+    .okmsg { color: var(--ok); min-height: 1.2em; margin-top: 8px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+    .tabs button { margin-top: 0; }
+    .hidden { display: none !important; }
+    .who { color: var(--muted); font-size: 0.9rem; }
+    a { color: var(--acc); }
+    #mail-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 12px;
+      min-height: 280px;
+      margin-top: 12px;
+    }
+    #inbox-list { border-right: 1px solid var(--line); padding-right: 8px; }
+    .mail-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin: 0 0 8px;
+      background: #12181f;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-weight: 500;
+    }
+    .mail-item .meta { display: block; color: var(--muted); font-size: 0.75rem; font-weight: 400; margin-top: 4px; }
+    .letter {
+      background: #12181f;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+    }
+    .letter h2 { font-size: 1rem; margin: 0 0 8px; }
+    @media (max-width: 700px) {
+      #mail-layout { grid-template-columns: 1fr; }
+      #inbox-list { border-right: 0; padding-right: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Почта</h1>
+    <p class="sub">Отдельный сервис ящиков. <a href="http://127.0.0.1:8080">Сервис Стража</a></p>
+
+    <section id="auth" class="card">
+      <div class="tabs">
+        <button type="button" id="tab-box">Завести почту</button>
+        <button type="button" id="tab-login" class="ghost">Войти в ящик</button>
+      </div>
+      <p class="who">Сначала заведите ящик здесь. В Страже регистрация пройдёт только на уже существующую почту. В ящике видны только ваши письма.</p>
+      <form id="form-box">
+        <label>Почта</label>
+        <input name="email" type="email" autocomplete="email" required />
+        <label>Пароль ящика (от 3 символов)</label>
+        <input name="password" type="password" autocomplete="new-password" required minlength="3" />
+        <button type="submit">Завести ящик</button>
+      </form>
+      <form id="form-login" class="hidden">
+        <label>Почта</label>
+        <input name="email" type="email" autocomplete="username" required />
+        <label>Пароль ящика</label>
+        <input name="password" type="password" autocomplete="current-password" required />
+        <button type="submit">Открыть ящик</button>
+      </form>
+      <div class="err" id="auth-err"></div>
+      <div class="okmsg" id="auth-ok"></div>
+    </section>
+
+    <section id="box" class="card hidden">
+      <div class="row">
+        <div class="who" id="who"></div>
+        <button type="button" class="ghost" id="btn-out">Выйти</button>
+      </div>
+      <p class="who">Уведомления агента только на эту почту.</p>
+      <div id="mail-layout">
+        <div id="inbox-list"></div>
+        <div id="letter" class="letter">Выберите письмо слева.</div>
+      </div>
+    </section>
+  </div>
+  <script>
+    const authBox = document.getElementById("auth");
+    const mailBox = document.getElementById("box");
+    const who = document.getElementById("who");
+    const inboxList = document.getElementById("inbox-list");
+    const letter = document.getElementById("letter");
+    const err = document.getElementById("auth-err");
+    const ok = document.getElementById("auth-ok");
+    let token = localStorage.getItem("mail_token") || "";
+
+    function fmtErr(data, fallback) {
+      const d = data && data.detail;
+      if (typeof d === "string") return d;
+      if (Array.isArray(d)) return d.map((x) => x.msg || JSON.stringify(x)).join("; ");
+      return fallback;
+    }
+    function showAuthTab(name) {
+      document.getElementById("form-box").classList.toggle("hidden", name !== "box");
+      document.getElementById("form-login").classList.toggle("hidden", name !== "login");
+      document.getElementById("tab-box").classList.toggle("ghost", name !== "box");
+      document.getElementById("tab-login").classList.toggle("ghost", name !== "login");
+      err.textContent = "";
+      ok.textContent = "";
+    }
+    document.getElementById("tab-box").onclick = () => showAuthTab("box");
+    document.getElementById("tab-login").onclick = () => showAuthTab("login");
+
+    function renderInbox(items) {
+      inboxList.innerHTML = "";
+      if (!items || !items.length) {
+        inboxList.innerHTML = '<div class="who">Писем пока нет.</div>';
+        letter.textContent = "Писем пока нет.";
+        return;
+      }
+      items.forEach((m) => {
+        const d = document.createElement("button");
+        d.type = "button";
+        d.className = "mail-item";
+        d.textContent = m.subject || "Письмо";
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent = m.created_at || "";
+        d.appendChild(meta);
+        d.onclick = () => openLetter(m.id);
+        inboxList.appendChild(d);
+      });
+    }
+    async function openLetter(id) {
+      letter.textContent = "Открываю…";
+      const r = await fetch("/api/inbox/" + id, { headers: { Authorization: "Bearer " + token } });
+      const data = await r.json();
+      if (!r.ok) {
+        letter.textContent = fmtErr(data, "Письмо не найдено");
+        return;
+      }
+      letter.innerHTML = "";
+      const h = document.createElement("h2");
+      h.textContent = data.subject || "Письмо";
+      const meta = document.createElement("div");
+      meta.className = "who";
+      meta.textContent = (data.created_at || "") + " · только ваш ящик";
+      const body = document.createElement("div");
+      body.textContent = data.body || "";
+      letter.appendChild(h);
+      letter.appendChild(meta);
+      letter.appendChild(body);
+    }
+    async function loadInbox() {
+      const r = await fetch("/api/inbox", { headers: { Authorization: "Bearer " + token } });
+      if (!r.ok) return;
+      const data = await r.json();
+      renderInbox(data.messages || []);
+    }
+    function showMail(email) {
+      authBox.classList.add("hidden");
+      mailBox.classList.remove("hidden");
+      who.textContent = "Ящик " + email;
+      loadInbox();
+    }
+    function showGate() {
+      mailBox.classList.add("hidden");
+      authBox.classList.remove("hidden");
+      inboxList.innerHTML = "";
+      letter.textContent = "Выберите письмо слева.";
+    }
+
+    document.getElementById("form-box").onsubmit = async (e) => {
+      e.preventDefault();
+      err.textContent = "";
+      ok.textContent = "";
+      const fd = new FormData(e.target);
+      const r = await fetch("/api/mailbox", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
+      });
+      const data = await r.json();
+      if (!r.ok) { err.textContent = fmtErr(data, "Не удалось завести почту"); return; }
+      const loginEmail = document.querySelector("#form-login input[name=email]");
+      if (loginEmail) loginEmail.value = data.email;
+      showAuthTab("login");
+      ok.textContent = "Ящик " + data.email + " заведён. Войдите в него здесь, а в Страже зарегистрируйтесь на эту почту.";
+    };
+
+    document.getElementById("form-login").onsubmit = async (e) => {
+      e.preventDefault();
+      err.textContent = "";
+      ok.textContent = "";
+      const fd = new FormData(e.target);
+      const r = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
+      });
+      const data = await r.json();
+      if (!r.ok) { err.textContent = fmtErr(data, "Не удалось войти"); return; }
+      token = data.token;
+      localStorage.setItem("mail_token", token);
+      showMail(data.email);
+    };
+
+    document.getElementById("btn-out").onclick = async () => {
+      await fetch("/api/logout", { method: "POST" });
+      token = "";
+      localStorage.removeItem("mail_token");
+      showGate();
+    };
+
+    (async () => {
+      if (!token) return;
+      const r = await fetch("/api/me", { headers: { Authorization: "Bearer " + token } });
+      if (!r.ok) {
+        localStorage.removeItem("mail_token");
+        token = "";
+        return;
+      }
+      showMail((await r.json()).email);
+    })();
+  </script>
+</body>
+</html>

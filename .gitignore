@@ -7,6 +7,9 @@ users.json
 strazh.db
 strazh.db-wal
 strazh.db-shm
+mail.db
+mail.db-wal
+mail.db-shm
 MailHog_windows_amd64.exe
 mailpit.exe
 mailpit-windows-amd64.zip

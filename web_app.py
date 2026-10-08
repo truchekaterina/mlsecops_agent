@@ -17,7 +17,7 @@ os.environ.setdefault("OLLAMA_NUM_GPU", "0")
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(DIR))
@@ -25,21 +25,30 @@ sys.path.insert(0, str(DIR))
 from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
 from auth import login, register, session_from_token  # noqa: E402
 from cbr_rates import format_rates  # noqa: E402
-from ledger import last_messages, snapshot  # noqa: E402
+from ledger import snapshot  # noqa: E402
 from store import DB_PATH  # noqa: E402
-from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase, set_client  # noqa: E402
+from mcp_strazh import (  # noqa: E402
+    confirm_reserve_purchase,
+    deny_reserve_purchase,
+    set_client,
+    transfer_between,
+)
 from replies import (  # noqa: E402
+    OTHER_USER_REPLY,
     apply_trade_order,
+    asks_about_other_user,
     compose_chat_reply,
     format_account,
     format_buy,
     format_instruments,
     format_portfolio,
+    format_transfer,
     is_account_question,
     is_catalog_question,
     is_fx_question,
     is_portfolio_question,
-    parse_trade_command,
+    parse_transfer,
+    resolve_followup_order,
 )
 
 STATIC = DIR / "static"
@@ -49,6 +58,8 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 _agents: dict[str, tuple] = {}
 _history: dict[str, list] = {}
 _lock = asyncio.Lock()
+_user_locks: dict[str, asyncio.Lock] = {}
+_user_locks_guard = asyncio.Lock()
 
 
 class RegisterIn(BaseModel):
@@ -64,6 +75,23 @@ class LoginIn(BaseModel):
 
 class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class TransferIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    amount: float = Field(gt=0, le=1_000_000_000)
+    source: str = Field(alias="from", min_length=2, max_length=40)
+    target: str = Field(alias="to", min_length=2, max_length=40)
+
+
+async def _hold_user(email: str) -> asyncio.Lock:
+    """Один активный запрос на пользователя: второй ждёт, пока первый не закончится."""
+    async with _user_locks_guard:
+        lock = _user_locks.get(email)
+        if lock is None:
+            lock = asyncio.Lock()
+            _user_locks[email] = lock
+        return lock
 
 
 def _bind_client(session: dict) -> None:
@@ -94,7 +122,6 @@ def _pack(session: dict, text: str, tools: list[str]) -> dict:
         "client": {"name": session["name"], "email": session["email"]},
         "account": acc,
         "needs_reserve_confirm": acc.get("pending_reserve"),
-        "inbox": last_messages(session["email"], limit=20),
     }
 
 
@@ -124,7 +151,6 @@ async def me(request: Request):
         "name": s["name"],
         "email": s["email"],
         "account": snapshot(s["email"]),
-        "inbox": last_messages(s["email"], limit=20),
     }
 
 
@@ -192,11 +218,33 @@ async def _agent_for(session: dict):
         return _agents[key]
 
 
+@app.post("/api/transfer")
+async def api_transfer(body: TransferIn, request: Request):
+    session = _bearer(request)
+    async with await _hold_user(session["email"]):
+        _bind_client(session)
+        payload = transfer_between(body.source, body.target, body.amount)
+        if payload.get("status") != "SUCCESS":
+            raise HTTPException(400, payload.get("error") or "Перевод не выполнен")
+        payload["text"] = format_transfer(payload)
+        payload["account"] = snapshot(session["email"])
+        return payload
+
+
 @app.post("/api/chat")
 async def api_chat(body: ChatIn, request: Request):
     session = _bearer(request)
+    async with await _hold_user(session["email"]):
+        return await _chat_locked(session, body)
+
+
+async def _chat_locked(session: dict, body: ChatIn):
     _bind_client(session)
     hist = _history.setdefault(session["email"], [])
+    if asks_about_other_user(body.message, session["email"], session["name"]):
+        hist.append({"role": "user", "content": body.message})
+        hist.append({"role": "assistant", "content": OTHER_USER_REPLY})
+        return _pack(session, OTHER_USER_REPLY, [])
     pending = snapshot(session["email"]).get("pending_reserve")
     if pending and _is_yes(body.message):
         payload = json.loads(confirm_reserve_purchase())
@@ -230,6 +278,13 @@ async def api_chat(body: ChatIn, request: Request):
         hist.append({"role": "user", "content": body.message})
         hist.append({"role": "assistant", "content": text})
         return _pack(session, text, ["list_instruments"])
+    move = parse_transfer(body.message)
+    if move:
+        payload = transfer_between(move["source"], move["target"], move["amount"])
+        text = format_transfer(payload)
+        hist.append({"role": "user", "content": body.message})
+        hist.append({"role": "assistant", "content": text})
+        return _pack(session, text, ["transfer_between"])
     if is_fx_question(body.message):
         try:
             text = format_rates(body.message)
@@ -238,7 +293,7 @@ async def api_chat(body: ChatIn, request: Request):
         hist.append({"role": "user", "content": body.message})
         hist.append({"role": "assistant", "content": text})
         return _pack(session, text, ["cbr_xml_daily"])
-    order = parse_trade_command(body.message)
+    order = resolve_followup_order(body.message, session["email"])
     if order:
         text, used = apply_trade_order(order, session["email"], session["name"])
         hist.append({"role": "user", "content": body.message})
@@ -270,6 +325,11 @@ async def api_chat(body: ChatIn, request: Request):
 @app.post("/api/reserve/confirm")
 async def api_reserve_confirm(request: Request):
     session = _bearer(request)
+    async with await _hold_user(session["email"]):
+        return await _reserve_confirm_locked(session)
+
+
+async def _reserve_confirm_locked(session: dict):
     _bind_client(session)
     payload = json.loads(confirm_reserve_purchase())
     if payload.get("status") == "SUCCESS":
@@ -283,15 +343,14 @@ async def api_reserve_confirm(request: Request):
 @app.post("/api/reserve/deny")
 async def api_reserve_deny(request: Request):
     session = _bearer(request)
+    async with await _hold_user(session["email"]):
+        return await _reserve_deny_locked(session)
+
+
+async def _reserve_deny_locked(session: dict):
     _bind_client(session)
     payload = json.loads(deny_reserve_purchase())
     return _pack(session, payload.get("message") or "Отменено", ["deny_reserve_purchase"])
-
-
-@app.get("/api/inbox")
-async def api_inbox(request: Request):
-    s = _bearer(request)
-    return {"email": s["email"], "messages": last_messages(s["email"], limit=30)}
 
 
 @app.get("/api/health")

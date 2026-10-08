@@ -300,3 +300,15 @@ def last_messages(email: str, limit: int = 10) -> list[dict]:
             (_key(email), limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_message(email: str, message_id: int) -> dict | None:
+    """Письмо только своего ящика. Чужой id не отдаём."""
+    with store.db() as conn:
+        row = conn.execute(
+            "SELECT * FROM messages WHERE id=? AND email=?",
+            (int(message_id), _key(email)),
+        ).fetchone()
+    if not row:
+        return None
+    return dict(row)

@@ -62,6 +62,7 @@
       cursor: pointer;
     }
     button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+    button:disabled, input:disabled { opacity: 0.55; cursor: not-allowed; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .err { color: var(--err); min-height: 1.2em; margin-top: 8px; }
     .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
@@ -86,22 +87,7 @@
     #ask-box { margin-top: 10px; }
     #ask-box button { margin-top: 0; }
     button.ok { background: var(--ok); }
-    #inbox {
-      margin-top: 16px;
-      border-top: 1px solid var(--line);
-      padding-top: 12px;
-    }
-    #inbox h2 { font-size: 1rem; margin: 0 0 8px; }
-    .mail {
-      background: #12181f;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px 12px;
-      margin: 8px 0;
-      white-space: pre-wrap;
-      font-size: 0.88rem;
-    }
-    .mail .meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 6px; }
+    .okmsg { color: var(--ok); min-height: 1.2em; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -117,7 +103,7 @@
         <button type="button" id="tab-reg">Регистрация</button>
         <button type="button" id="tab-login" class="ghost">Вход</button>
       </div>
-      <p class="who">Свой вход — свой счёт и своя почта. Чужие сделки и письма не видны.</p>
+      <p class="who">Сначала заведите ящик в <a href="http://127.0.0.1:8090" target="_blank" rel="noopener">почтовом сервисе</a>. Регистрация здесь пройдёт только на уже существующую почту. Письма читаются только там.</p>
 
       <form id="form-reg">
         <label>Имя</label>
@@ -137,6 +123,7 @@
         <button type="submit">Войти</button>
       </form>
       <div class="err" id="auth-err"></div>
+      <div class="okmsg" id="auth-ok"></div>
     </section>
 
     <section id="chat" class="card hidden">
@@ -145,8 +132,8 @@
           <div class="who" id="who"></div>
           <div class="who" id="bal"></div>
         </div>
+        <a href="http://127.0.0.1:8090" target="_blank" rel="noopener">Почта</a>
         <button type="button" class="ghost" id="btn-out">Выйти</button>
-        <a href="http://127.0.0.1:8025" target="_blank" rel="noopener">Почта Mailpit</a>
       </div>
       <div id="chat-log"></div>
       <div id="ask-box" class="hidden">
@@ -160,11 +147,6 @@
         <input id="q" placeholder="Например: Купи 3 NVDA" autocomplete="off" />
         <button type="submit">Отправить</button>
       </form>
-      <div id="inbox">
-        <h2>Почта</h2>
-        <div class="who">Только письма на ваш адрес регистрации.</div>
-        <div id="inbox-list"></div>
-      </div>
     </section>
   </div>
   <script>
@@ -173,14 +155,21 @@
     const who = document.getElementById("who");
     const bal = document.getElementById("bal");
     const log = document.getElementById("chat-log");
-    const inboxList = document.getElementById("inbox-list");
     const err = document.getElementById("auth-err");
+    const ok = document.getElementById("auth-ok");
     const HINT = "Можно: список акций, состояние счёта, какие куплены, курс валют ЦБ, купить/продать.";
     let token = localStorage.getItem("strazh_token") || "";
+    let chatBusy = false;
+    function setChatBusy(on) {
+      chatBusy = on;
+      document.getElementById("q").disabled = on;
+      document.querySelector("#composer button").disabled = on;
+      document.getElementById("btn-yes").disabled = on;
+      document.getElementById("btn-no").disabled = on;
+    }
     function resetChat() {
       log.innerHTML = "";
       addMsg("sys", HINT);
-      inboxList.innerHTML = "";
     }
     function fmtErr(data, fallback) {
       const d = data && data.detail;
@@ -194,39 +183,13 @@
       const pos = (acc.positions || []).map((p) => p.ticker + " " + p.shares + " шт.").join(", ") || "бумаг нет";
       return "Основной: " + acc.cash_usd + " $ · Резерв: " + acc.reserve_usd + " $ · " + pos;
     }
-    function renderInbox(items) {
-      inboxList.innerHTML = "";
-      if (!items || !items.length) {
-        inboxList.innerHTML = '<div class="who">Писем пока нет.</div>';
-        return;
-      }
-      items.forEach((m) => {
-        const d = document.createElement("div");
-        d.className = "mail";
-        const meta = document.createElement("div");
-        meta.className = "meta";
-        meta.textContent = (m.subject || "Письмо") + " → " + m.email + (m.created_at ? " · " + m.created_at : "");
-        d.appendChild(meta);
-        d.appendChild(document.createTextNode(m.body || ""));
-        inboxList.appendChild(d);
-      });
-    }
-    async function loadInbox(items) {
-      if (items) { renderInbox(items); return; }
-      if (!token) return;
-      const r = await fetch("/api/inbox", { headers: { Authorization: "Bearer " + token } });
-      if (!r.ok) return;
-      const data = await r.json();
-      renderInbox(data.messages || []);
-    }
     function showChat(user) {
       resetChat();
       authBox.classList.add("hidden");
       chatBox.classList.remove("hidden");
-      who.textContent = "Вы вошли: " + user.name + " <" + user.email + ">. Письма → Mailpit и блок «Почта».";
+      who.textContent = "Вы вошли: " + user.name + " <" + user.email + ">. Уведомления — в почтовом сервисе.";
       bal.textContent = fmtAcc(user.account);
       refreshAcc();
-      loadInbox(user.inbox);
       showAsk(user.account && user.account.pending_reserve);
     }
     async function refreshAcc() {
@@ -240,36 +203,29 @@
       chatBox.classList.add("hidden");
       authBox.classList.remove("hidden");
     }
-    function addMsg(cls, text, tools) {
+    function addMsg(cls, text) {
       const d = document.createElement("div");
       d.className = "msg " + cls;
       d.textContent = text;
-      if (tools && tools.length) {
-        const t = document.createElement("div");
-        t.className = "tools";
-        t.textContent = "LangChain MCP: " + tools.join(", ");
-        d.appendChild(t);
-      }
       log.appendChild(d);
       log.scrollTop = log.scrollHeight;
     }
 
-    document.getElementById("tab-reg").onclick = () => {
-      document.getElementById("form-reg").classList.remove("hidden");
-      document.getElementById("form-login").classList.add("hidden");
-      document.getElementById("tab-reg").classList.remove("ghost");
-      document.getElementById("tab-login").classList.add("ghost");
-    };
-    document.getElementById("tab-login").onclick = () => {
-      document.getElementById("form-login").classList.remove("hidden");
-      document.getElementById("form-reg").classList.add("hidden");
-      document.getElementById("tab-login").classList.remove("ghost");
-      document.getElementById("tab-reg").classList.add("ghost");
-    };
+    function showAuthTab(name) {
+      document.getElementById("form-reg").classList.toggle("hidden", name !== "reg");
+      document.getElementById("form-login").classList.toggle("hidden", name !== "login");
+      document.getElementById("tab-reg").classList.toggle("ghost", name !== "reg");
+      document.getElementById("tab-login").classList.toggle("ghost", name !== "login");
+      err.textContent = "";
+      ok.textContent = "";
+    }
+    document.getElementById("tab-reg").onclick = () => showAuthTab("reg");
+    document.getElementById("tab-login").onclick = () => showAuthTab("login");
 
     document.getElementById("form-reg").onsubmit = async (e) => {
       e.preventDefault();
       err.textContent = "";
+      ok.textContent = "";
       const fd = new FormData(e.target);
       const r = await fetch("/api/register", {
         method: "POST",
@@ -317,6 +273,7 @@
 
     document.getElementById("composer").onsubmit = async (e) => {
       e.preventDefault();
+      if (chatBusy) return;
       const inp = document.getElementById("q");
       const text = inp.value.trim();
       if (!text) return;
@@ -332,28 +289,33 @@
       askBox.classList.remove("hidden");
     }
     async function sendChat(text) {
+      if (chatBusy) return;
+      setChatBusy(true);
       addMsg("user", text);
-      addMsg("sys", "LangChain-агент думает (на CPU 20–60 сек)...");
+      addMsg("sys", "Запрос выполняется, чат заблокирован...");
       const pending = log.lastChild;
-      const r = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer " + token,
-        },
-        body: JSON.stringify({ message: text }),
-      });
-      pending.remove();
-      const data = await r.json();
-      if (!r.ok) {
-        addMsg("sys", data.detail || "Нужно войти заново");
-        if (r.status === 401) showAuth();
-        return;
+      try {
+        const r = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+          },
+          body: JSON.stringify({ message: text }),
+        });
+        pending.remove();
+        const data = await r.json();
+        if (!r.ok) {
+          addMsg("sys", data.detail || "Нужно войти заново");
+          if (r.status === 401) showAuth();
+          return;
+        }
+        addMsg("agent", data.text);
+        if (data.account) bal.textContent = fmtAcc(data.account);
+        showAsk(data.needs_reserve_confirm);
+      } finally {
+        setChatBusy(false);
       }
-      addMsg("agent", data.text, data.tools);
-      if (data.account) bal.textContent = fmtAcc(data.account);
-      if (data.inbox) renderInbox(data.inbox);
-      showAsk(data.needs_reserve_confirm);
     }
     document.getElementById("btn-yes").onclick = () => sendChat("да");
     document.getElementById("btn-no").onclick = () => sendChat("нет");

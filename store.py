@@ -77,6 +77,11 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS mailboxes (
+  email TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_trades_email ON trades(email, id);
 CREATE INDEX IF NOT EXISTS idx_messages_email ON messages(email, id);
 """
@@ -122,6 +127,7 @@ def init() -> None:
             conn.commit()
             _migrate_json(conn)
             _seed_if_empty(conn)
+            _backfill_mailboxes(conn)
             conn.commit()
         finally:
             conn.close()
@@ -224,10 +230,28 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
         ("client@demo", "Клиент", "demo"),
         ("katya@demo", "Катя", "katya"),
     ):
+        created = now_iso()
+        conn.execute(
+            """
+            INSERT INTO mailboxes(email, created_at)
+            VALUES(?, ?)
+            """,
+            (email, created),
+        )
         conn.execute(
             """
             INSERT INTO users(email, name, password_sha256, created_at)
             VALUES(?, ?, ?, ?)
             """,
-            (email, name, hp(password), now_iso()),
+            (email, name, hp(password), created),
         )
+
+
+def _backfill_mailboxes(conn: sqlite3.Connection) -> None:
+    """Уже существующие учётки получают ящик, чтобы вход не сломался."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO mailboxes(email, created_at)
+        SELECT email, created_at FROM users
+        """
+    )

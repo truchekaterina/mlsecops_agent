@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import ledger
+import mail_client
 import store
 
 DIR = Path(__file__).resolve().parent
@@ -72,11 +73,19 @@ def register(name: str, email: str, password: str) -> dict:
     email = email.strip().lower()
     if not name or "@" not in email or len(password) < 3:
         raise ValueError("Нужны имя, почта с @ и пароль от 3 символов.")
+    try:
+        exists = mail_client.mailbox_exists(email)
+    except mail_client.MailUnavailable as exc:
+        raise ValueError(str(exc)) from exc
+    if not exists:
+        raise ValueError(
+            "Такой почты нет. Сначала заведите ящик в почтовом сервисе http://127.0.0.1:8090"
+        )
     store.init()
     with store.db() as conn:
         exists = conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone()
         if exists:
-            raise ValueError("Такая почта уже есть. Войдите.")
+            raise ValueError("На эту почту уже есть учётка. Войдите.")
         conn.execute(
             """
             INSERT INTO users(email, name, password_sha256, created_at)
