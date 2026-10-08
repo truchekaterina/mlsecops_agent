@@ -10,19 +10,18 @@ import os
 import threading
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 import cbr_rates
 import ledger
 import mail_client
+from paths import DATA
 
 _TLS = threading.local()
 
-DIR = Path(__file__).resolve().parent
-LOG = DIR / "trades.log"
-SESSION = DIR / "session.json"
+LOG = DATA / "trades.log"
+SESSION = DATA / "session.json"
 
 mcp = FastMCP("strazh-mcp")
 

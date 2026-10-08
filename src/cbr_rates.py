@@ -9,11 +9,11 @@ import threading
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import Any
 
-DIR = Path(__file__).resolve().parent
-FILE_CACHE = DIR / "cbr_cache.json"
+from paths import DATA
+
+FILE_CACHE = DATA / "cbr_cache.json"
 
 CBR_URL = "https://www.cbr.ru/scripts/XML_daily.asp"
 CBR_URLS = (

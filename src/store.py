@@ -10,12 +10,12 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 
-DIR = Path(__file__).resolve().parent
-DB_PATH = DIR / "strazh.db"
-USERS_JSON = DIR / "users.json"
-LEDGERS_JSON = DIR / "ledgers.json"
+from paths import DATA
+
+DB_PATH = DATA / "strazh.db"
+USERS_JSON = DATA / "users.json"
+LEDGERS_JSON = DATA / "ledgers.json"
 
 SECRET_DEFAULT = "strazh-demo-hs256"
 

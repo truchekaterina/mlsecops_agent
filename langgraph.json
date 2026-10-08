@@ -2,6 +2,6 @@
   "python_version": "3.12",
   "dependencies": ["."],
   "graphs": {
-    "agent": "./agent_mode_a.py:make_graph"
+    "agent": "./src/agent_mode_a.py:make_graph"
   }
 }

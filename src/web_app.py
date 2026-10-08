@@ -13,14 +13,14 @@ import sys
 from pathlib import Path
 
 os.environ.setdefault("OLLAMA_NUM_GPU", "0")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(DIR))
+from paths import STATIC  # noqa: E402
 
 from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
 from auth import login, register, session_from_token  # noqa: E402
@@ -51,7 +51,6 @@ from replies import (  # noqa: E402
     resolve_followup_order,
 )
 
-STATIC = DIR / "static"
 app = FastAPI(title="Страж", version="mode-a")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 

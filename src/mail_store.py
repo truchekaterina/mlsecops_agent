@@ -7,10 +7,10 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 
-DIR = Path(__file__).resolve().parent
-DB_PATH = DIR / "mail.db"
+from paths import DATA
+
+DB_PATH = DATA / "mail.db"
 
 _init_lock = threading.Lock()
 _ready = False

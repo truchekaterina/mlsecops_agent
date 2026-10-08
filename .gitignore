@@ -10,6 +10,17 @@ strazh.db-shm
 mail.db
 mail.db-wal
 mail.db-shm
+data/trades.log
+data/session.json
+data/ledgers.json
+data/ledgers.json.tmp
+data/users.json
+data/strazh.db
+data/strazh.db-wal
+data/strazh.db-shm
+data/mail.db
+data/mail.db-wal
+data/mail.db-shm
 MailHog_windows_amd64.exe
 mailpit.exe
 mailpit-windows-amd64.zip

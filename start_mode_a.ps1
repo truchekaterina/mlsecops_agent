@@ -13,9 +13,10 @@ try { chcp 65001 | Out-Null } catch {}
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 
 $python = Join-Path $root ".venv\Scripts\python.exe"
+$src = Join-Path $stand "src"
 Start-Process -FilePath $python -ArgumentList @(
     "-m", "uvicorn", "mail_app:app", "--host", "127.0.0.1", "--port", "8090"
-) -WorkingDirectory $stand -WindowStyle Hidden
+) -WorkingDirectory $src -WindowStyle Hidden
 Write-Host "Почта:   http://127.0.0.1:8090"
 
 if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
@@ -26,5 +27,5 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
 Write-Host "Сервис Стража (LangChain create_agent)."
 Write-Host "Откройте в браузере:  http://127.0.0.1:8080"
 Write-Host "Сначала ящик на :8090, потом регистрация в Страже на эту почту."
-Set-Location $stand
+Set-Location $src
 & $python -m uvicorn web_app:app --host 0.0.0.0 --port 8080

@@ -10,14 +10,13 @@ import hashlib
 import hmac
 import json
 import time
-from pathlib import Path
 
 import ledger
 import mail_client
 import store
+from paths import DATA
 
-DIR = Path(__file__).resolve().parent
-SESSION = DIR / "session.json"
+SESSION = DATA / "session.json"
 TTL_HOURS = 8
 
 

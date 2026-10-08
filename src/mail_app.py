@@ -11,16 +11,14 @@ import hmac
 import json
 import os
 import time
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import mail_store
+from paths import STATIC
 
-DIR = Path(__file__).resolve().parent
-STATIC = DIR / "static"
 SECRET = os.environ.get("STRAZH_MAIL_SECRET", "strazh-mail-demo")
 TTL_HOURS = 8
 
