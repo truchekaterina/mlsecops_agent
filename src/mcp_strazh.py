@@ -351,6 +351,7 @@ def execute_buy(ticker: str, shares: int) -> str:
     return _finish_buy(email, ticker, shares, use_reserve=False)
 
 
+@mcp.tool()
 def confirm_reserve_purchase() -> str:
     """После явного «да» клиента: снять нехватку с резерва и купить отложенную заявку."""
     email, _name = _client_profile()
@@ -361,6 +362,7 @@ def confirm_reserve_purchase() -> str:
     return _finish_buy(email, pending["ticker"], int(pending["shares"]), use_reserve=True)
 
 
+@mcp.tool()
 def deny_reserve_purchase() -> str:
     """Клиент отказался снимать резерв — покупка отменяется."""
     email, _name = _client_profile()
@@ -494,11 +496,11 @@ def transfer_between(source: str, target: str, amount: float) -> dict:
     dst = _bucket(target)
     amount = round(float(amount), 2)
     if src is None or dst is None:
-        return {"status": "ERROR", "error": "счёт: cash/основной или reserve/резерв"}
+        return {"status": "ERROR", "side": "TRANSFER", "error": "счёт: cash/основной или reserve/резерв"}
     if src == dst:
-        return {"status": "ERROR", "error": "нельзя перевести на тот же счёт"}
+        return {"status": "ERROR", "side": "TRANSFER", "error": "нельзя перевести на тот же счёт"}
     if amount <= 0:
-        return {"status": "ERROR", "error": "сумма перевода должна быть > 0"}
+        return {"status": "ERROR", "side": "TRANSFER", "error": "сумма перевода должна быть > 0"}
     email, _name = _client_profile()
     label = {"cash_usd": "основном счёте", "reserve_usd": "резервном счёте"}
 
@@ -515,6 +517,7 @@ def transfer_between(source: str, target: str, amount: float) -> dict:
         fresh = ledger.get_book(email)
         return {
             "status": "ERROR",
+            "side": "TRANSFER",
             "error": f"недостаточно денег на {exc}",
             "cash_usd": fresh["cash_usd"],
             "reserve_usd": fresh["reserve_usd"],
@@ -557,6 +560,7 @@ def transfer_between(source: str, target: str, amount: float) -> dict:
     )
     return {
         "status": "SUCCESS",
+        "side": "TRANSFER",
         "transferred": amount,
         "from": src_name,
         "to": dst_name,
@@ -567,6 +571,18 @@ def transfer_between(source: str, target: str, amount: float) -> dict:
         "mail_ok": mail_ok,
         "mail_error": mail_error,
     }
+
+
+@mcp.tool(name="transfer_between")
+def transfer_between_tool(source: str, target: str, amount: float) -> str:
+    """Перевести деньги между основным и резервным счётом этого клиента.
+
+    Args:
+        source: откуда: cash или reserve
+        target: куда: cash или reserve
+        amount: сумма в долларах
+    """
+    return _dump(transfer_between(source, target, amount))
 
 
 def _mail_transfer(

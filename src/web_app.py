@@ -24,7 +24,6 @@ from paths import STATIC  # noqa: E402
 
 from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
 from auth import login, register, session_from_token  # noqa: E402
-from cbr_rates import format_rates  # noqa: E402
 from ledger import snapshot  # noqa: E402
 from store import DB_PATH  # noqa: E402
 from mcp_strazh import (  # noqa: E402
@@ -33,23 +32,7 @@ from mcp_strazh import (  # noqa: E402
     set_client,
     transfer_between,
 )
-from replies import (  # noqa: E402
-    OTHER_USER_REPLY,
-    apply_trade_order,
-    asks_about_other_user,
-    compose_chat_reply,
-    format_account,
-    format_buy,
-    format_instruments,
-    format_portfolio,
-    format_transfer,
-    is_account_question,
-    is_catalog_question,
-    is_fx_question,
-    is_portfolio_question,
-    parse_transfer,
-    resolve_followup_order,
-)
+from replies import OTHER_USER_REPLY, asks_about_other_user, compose_chat_reply, format_buy, format_transfer  # noqa: E402
 
 app = FastAPI(title="Страж", version="mode-a")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -101,16 +84,6 @@ def _bind_client(session: dict) -> None:
 
 def _fresh_chat(email: str) -> None:
     _history[email] = []
-
-
-def _is_yes(text: str) -> bool:
-    t = text.strip().lower().rstrip(".!")
-    return t in {"да", "yes", "y", "ок", "ok", "согласен", "согласна", "подтверждаю"}
-
-
-def _is_no(text: str) -> bool:
-    t = text.strip().lower().rstrip(".!")
-    return t in {"нет", "no", "n", "отмена", "не согласен", "не согласна"}
 
 
 def _pack(session: dict, text: str, tools: list[str]) -> dict:
@@ -244,61 +217,6 @@ async def _chat_locked(session: dict, body: ChatIn):
         hist.append({"role": "user", "content": body.message})
         hist.append({"role": "assistant", "content": OTHER_USER_REPLY})
         return _pack(session, OTHER_USER_REPLY, [])
-    pending = snapshot(session["email"]).get("pending_reserve")
-    if pending and _is_yes(body.message):
-        payload = json.loads(confirm_reserve_purchase())
-        if payload.get("status") == "SUCCESS":
-            text = format_buy(payload, snapshot(session["email"]), session["email"])
-        else:
-            text = payload.get("message") or payload.get("error") or str(payload)
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, ["confirm_reserve_purchase"])
-    if pending and _is_no(body.message):
-        payload = json.loads(deny_reserve_purchase())
-        text = payload.get("message") or "Покупка отменена, резерв не трогали."
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, ["deny_reserve_purchase"])
-
-    snap = snapshot(session["email"])
-    if is_portfolio_question(body.message):
-        text = format_portfolio(snap)
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, ["get_portfolio"])
-    if is_account_question(body.message):
-        text = format_account(snap)
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, ["get_account"])
-    if is_catalog_question(body.message):
-        text = format_instruments()
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, ["list_instruments"])
-    move = parse_transfer(body.message)
-    if move:
-        payload = transfer_between(move["source"], move["target"], move["amount"])
-        text = format_transfer(payload)
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, ["transfer_between"])
-    if is_fx_question(body.message):
-        try:
-            text = format_rates(body.message)
-        except Exception as exc:
-            text = f"Курс ЦБ сейчас недоступен: {exc}"
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, ["cbr_xml_daily"])
-    order = resolve_followup_order(body.message, session["email"])
-    if order:
-        text, used = apply_trade_order(order, session["email"], session["name"])
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": text})
-        return _pack(session, text, used)
-
     agent, _tools, _client = await _agent_for(session)
     hist.append({"role": "user", "content": body.message})
     result = await agent.ainvoke(

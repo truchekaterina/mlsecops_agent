@@ -9,31 +9,12 @@ from pathlib import Path
 
 os.environ.setdefault("OLLAMA_NUM_GPU", "0")
 
-import json  # noqa: E402
-
 import mail_client  # noqa: E402
 from auth import login, register, require_session  # noqa: E402
 from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
-from cbr_rates import format_rates  # noqa: E402
 from ledger import snapshot  # noqa: E402
-from mcp_strazh import confirm_reserve_purchase, deny_reserve_purchase, set_client, transfer_between  # noqa: E402
-from replies import (  # noqa: E402
-    OTHER_USER_REPLY,
-    apply_trade_order,
-    asks_about_other_user,
-    compose_chat_reply,
-    format_account,
-    format_buy,
-    format_instruments,
-    format_portfolio,
-    format_transfer,
-    is_account_question,
-    is_catalog_question,
-    is_fx_question,
-    is_portfolio_question,
-    resolve_followup_order,
-    parse_transfer,
-)
+from mcp_strazh import set_client  # noqa: E402
+from replies import OTHER_USER_REPLY, asks_about_other_user, compose_chat_reply  # noqa: E402
 
 DIR = Path(__file__).resolve().parent
 
@@ -128,6 +109,7 @@ async def main() -> None:
     names = ", ".join(sorted(t.name for t in tools))
     print(f"Тулы: {names}")
     print()
+    hist: list[dict] = []
     while True:
         try:
             text = input("Клиент: ").strip()
@@ -140,55 +122,10 @@ async def main() -> None:
             print("Агент:", OTHER_USER_REPLY)
             print()
             continue
-        pending = snapshot(session["email"]).get("pending_reserve")
-        low = text.strip().lower().rstrip(".!")
-        if pending and low in {"да", "yes", "y", "ок", "согласен"}:
-            payload = json.loads(confirm_reserve_purchase())
-            if payload.get("status") == "SUCCESS":
-                print("Агент:", format_buy(payload, snapshot(session["email"]), session["email"]))
-            else:
-                print("Агент:", payload.get("message") or payload)
-            print()
-            continue
-        if pending and low in {"нет", "no", "отмена"}:
-            payload = json.loads(deny_reserve_purchase())
-            print("Агент:", payload.get("message") or payload)
-            print()
-            continue
-        if is_portfolio_question(text):
-            print("Агент:", format_portfolio(snapshot(session["email"])))
-            print()
-            continue
-        if is_account_question(text):
-            print("Агент:", format_account(snapshot(session["email"])))
-            print()
-            continue
-        if is_catalog_question(text):
-            print("Агент:", format_instruments())
-            print()
-            continue
-        move = parse_transfer(text)
-        if move:
-            payload = transfer_between(move["source"], move["target"], move["amount"])
-            print("Агент:", format_transfer(payload))
-            print()
-            continue
-        if is_fx_question(text):
-            try:
-                print("Агент:", format_rates(text))
-            except Exception as exc:
-                print("Агент: курс ЦБ недоступен:", exc)
-            print()
-            continue
-        order = resolve_followup_order(text, session["email"])
-        if order:
-            reply, _used = apply_trade_order(order, session["email"], session["name"])
-            print("Агент:", reply)
-            print()
-            continue
         print("... думаю (на CPU может быть 20–60 сек)")
+        hist.append({"role": "user", "content": text})
         result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": text}]},
+            {"messages": list(hist)},
             config={"recursion_limit": 25},
         )
         snap = snapshot(session["email"])
@@ -200,6 +137,9 @@ async def main() -> None:
             email=session["email"],
             user_message=text,
         )
+        hist.append({"role": "assistant", "content": reply})
+        if len(hist) > 40:
+            del hist[:-40]
         print("Агент:", reply)
         print()
 

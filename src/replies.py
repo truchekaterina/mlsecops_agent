@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -44,14 +43,6 @@ def format_portfolio(snap: dict) -> str:
         f"{body}\n"
         f"Оценка позиций: {snap.get('positions_usd', 0)} $.\n"
         f"Основной счёт: {snap.get('cash_usd', 0)} $, резерв: {snap.get('reserve_usd', 0)} $."
-    )
-
-
-def format_account(snap: dict) -> str:
-    return (
-        f"Основной счёт: {snap.get('cash_usd', 0)} $.\n"
-        f"Резерв: {snap.get('reserve_usd', 0)} $.\n"
-        f"Бумаги:\n{format_holdings(snap)}"
     )
 
 
@@ -184,38 +175,6 @@ def asks_about_other_user(text: str, email: str, name: str = "") -> bool:
     return False
 
 
-def _transfer_side(word: str) -> str | None:
-    if word.startswith("основн"):
-        return "cash"
-    if word.startswith("резерв"):
-        return "reserve"
-    return None
-
-
-def parse_transfer(text: str) -> dict | None:
-    """«переведи 100 долларов с основного счета на резервный» и обратный перевод."""
-    raw = (text or "").strip().lower().replace("ё", "е")
-    if not any(word in raw for word in ("перевед", "перевод", "перекинь", "переложи")):
-        return None
-    num = re.search(r"(\d+(?:[.,]\d+)?)", raw)
-    if not num:
-        return None
-    amount = round(float(num.group(1).replace(",", ".")), 2)
-    if amount <= 0:
-        return None
-    src_m = re.search(r"(?:^|\s)с\s+(основн\w*|резерв\w*)", raw)
-    dst_m = re.search(r"(?:^|\s)(?:на|в)\s+(основн\w*|резерв\w*)", raw)
-    source = _transfer_side(src_m.group(1)) if src_m else None
-    target = _transfer_side(dst_m.group(1)) if dst_m else None
-    if source and target and source != target:
-        return {"source": source, "target": target, "amount": amount}
-    if "резерв" not in raw or "основн" not in raw:
-        return None
-    if raw.find("резерв") < raw.find("основн"):
-        return {"source": "reserve", "target": "cash", "amount": amount}
-    return {"source": "cash", "target": "reserve", "amount": amount}
-
-
 def format_transfer(payload: dict) -> str:
     if payload.get("status") != "SUCCESS":
         return str(payload.get("error") or "Перевод не выполнен.")
@@ -234,233 +193,10 @@ def format_transfer(payload: dict) -> str:
     )
 
 
-def is_portfolio_question(text: str) -> bool:
-    t = text.lower()
-    if any(x in t for x in ("можно купить", "доступн", "для покупк", "список акци", "какие акции я могу")):
-        return False
-    return any(
-        x in t
-        for x in (
-            "у меня",
-            "портфел",
-            "куплено",
-            "мои акци",
-            "что есть",
-            "какие акции есть",
-            "сколько акци",
-        )
-    )
-
-
-def is_account_question(text: str) -> bool:
-    t = text.lower().replace("ё", "е")
-    return any(
-        x in t
-        for x in (
-            "состояни",
-            "сколько денег",
-            "баланс",
-            "остаток",
-            "на счет",
-            "мой счет",
-            "моего счет",
-            "мои деньги",
-            "резерв сколько",
-        )
-    )
-
-
-def is_catalog_question(text: str) -> bool:
-    t = text.lower()
-    return any(
-        x in t
-        for x in (
-            "список акци",
-            "какие акции можно",
-            "какие акции я могу",
-            "какие акции",
-            "что я могу купить",
-            "что могу купить",
-            "доступн",
-            "для покупк",
-            "каталог",
-        )
-    )
-
-
-def is_fx_question(text: str) -> bool:
-    t = text.lower()
-    if is_trade_request(t) or is_catalog_question(t) or parse_transfer(t):
-        return False
-    return any(x in t for x in ("курс", "валют", "цб", "доллар", "евро", "юан"))
-
-
-def format_instruments() -> str:
-    from ledger import INSTRUMENTS
-
-    lines = ["Доступные для покупки акции:"]
-    for ticker, meta in INSTRUMENTS.items():
-        lines.append(f"- {meta['name']} ({ticker}): ${meta['price_usd']}")
-    return "\n".join(lines)
-
-
-def is_trade_request(text: str) -> bool:
-    return parse_trade_command(text) is not None
-
-
-_ALIASES = (
-    ("nvidia", "NVDA"),
-    ("nvda", "NVDA"),
-    ("нвидиа", "NVDA"),
-    ("энвидиа", "NVDA"),
-    ("apple", "AAPL"),
-    ("aapl", "AAPL"),
-    ("эппл", "AAPL"),
-    ("эпл", "AAPL"),
-    ("яблок", "AAPL"),
-    ("microsoft", "MSFT"),
-    ("msft", "MSFT"),
-    ("майкрософт", "MSFT"),
-)
-
-
-def _resolve_ticker(text: str) -> str | None:
-    t = text.lower()
-    for alias, ticker in _ALIASES:
-        if alias in t:
-            return ticker
-    return None
-
-
-_last_order: dict[str, dict] = {}
 _CLAIM_RE = re.compile(
-    r"вы\s+(купили|продали)|сумма\s+покупки|стоимость\s+покупки|письмо\s+[«\"]куплено",
+    r"вы\s+(купили|продали)|сумма\s+покупки|стоимость\s+покупки|письмо\s+[«\"]куплено|перевед",
     re.IGNORECASE,
 )
-
-
-def _bare_ticker(text: str) -> str | None:
-    """Сообщение из одного тикера: «NVDA», «тогда nvidia», без новой команды."""
-    raw = (text or "").strip().lower().rstrip(".!")
-    raw = re.sub(r"^(тогда|ну|это|тикер)\s+", "", raw).strip()
-    ticker = _resolve_ticker(raw)
-    if not ticker:
-        return None
-    leftover = raw
-    for alias, _ticker in _ALIASES:
-        leftover = leftover.replace(alias, " ")
-    leftover = re.sub(r"\b(акци\w*|штук\w*|бумаг\w*)\b", " ", leftover)
-    leftover = re.sub(r"\s+", " ", leftover).strip(" .,")
-    if leftover:
-        return None
-    return ticker
-
-
-def resolve_followup_order(text: str, email: str) -> dict | None:
-    """«Купи 5 штук» после NVDA берёт тот тикер. «NVDA» после вопроса «какую бумагу» закрывает заявку."""
-    order = parse_trade_command(text)
-    prev = _last_order.get(email)
-    if order:
-        if not order.get("ticker") and prev and prev.get("ticker"):
-            order = {**order, "ticker": prev["ticker"]}
-        _last_order[email] = {
-            "side": order["side"],
-            "ticker": order.get("ticker"),
-            "shares": int(order["shares"]),
-        }
-        return order
-    ticker = _bare_ticker(text)
-    if ticker and prev and prev.get("side") and not prev.get("ticker"):
-        done = {"side": prev["side"], "ticker": ticker, "shares": int(prev["shares"])}
-        _last_order[email] = done
-        return done
-    return None
-
-
-def parse_trade_command(text: str) -> dict | None:
-    """Явная команда купить/продать. Вопросы и прошедшее время не считаются."""
-    t = (text or "").strip().lower()
-    if not t:
-        return None
-    if any(
-        x in t
-        for x in (
-            "почему",
-            "зачем",
-            "можно купить",
-            "список",
-            "доступн",
-            "какие акции я могу",
-        )
-    ):
-        return None
-    if is_portfolio_question(t) or is_account_question(t):
-        return None
-    side = None
-    if re.search(r"(^|\s)(купи|купить|buy)(\s|$)", t) or t.startswith("купи ") or t.startswith("купить ") or t.startswith("buy "):
-        if not re.match(r"купил", t):
-            side = "BUY"
-    if re.search(r"(^|\s)(продай|продать|sell)(\s|$)", t) or t.startswith("прод") or t.startswith("sell "):
-        if not re.match(r"продал", t):
-            side = "SELL"
-    if t in {"купи", "купить", "buy", "продай", "продать", "sell"}:
-        side = "BUY" if t in {"купи", "купить", "buy"} else "SELL"
-    if not side:
-        return None
-    ticker = _resolve_ticker(t)
-    num = re.search(r"(\d+)", t)
-    shares = int(num.group(1)) if num else 1
-    if shares < 1:
-        return None
-    return {"side": side, "ticker": ticker, "shares": shares}
-
-
-def format_trade_result(payload: dict, email: str) -> str:
-    from ledger import snapshot
-
-    snap = snapshot(email)
-    if payload.get("status") == "ERROR":
-        text = payload.get("message") or payload.get("error") or "Сделка не прошла."
-        if payload.get("have") is not None:
-            return (
-                f"Нельзя продать {payload.get('want')} {payload.get('ticker')}: "
-                f"в портфеле {payload.get('have')} шт.\n"
-                f"{format_portfolio(snap)}"
-            )
-        return text
-    if payload.get("status") == "NEED_RESERVE_CONFIRM":
-        p = snap.get("pending_reserve") or payload
-        return (
-            f"На основном счёте {p.get('cash_usd')} $, резерв {p.get('reserve_usd')} $. "
-            f"Покупка {p.get('shares')} {p.get('ticker')} стоит {p.get('need_usd')} $ "
-            f"(не хватает {p.get('shortfall_usd')} $). "
-            "Снять нехватку с резервного счёта? Напишите «да» или «нет»."
-        )
-    if payload.get("status") == "SUCCESS" and payload.get("side") == "SELL":
-        return format_sell(payload, snap, email)
-    if payload.get("status") == "SUCCESS" and payload.get("side") == "BUY":
-        return format_buy(payload, snap, email)
-    return payload.get("message") or str(payload)
-
-
-def apply_trade_order(order: dict, email: str, name: str = "") -> tuple[str, list[str]]:
-    """Купить/продать без модели: тот же execute_buy / execute_sell."""
-    from mcp_strazh import execute_buy, execute_sell, set_client
-
-    set_client(email, name)
-    if not order.get("ticker"):
-        return (
-            "Не понял, какую бумагу купить или продать. "
-            "Доступны NVIDIA (NVDA), Apple (AAPL), Microsoft (MSFT).",
-            [],
-        )
-    if order["side"] == "BUY":
-        payload = json.loads(execute_buy(order["ticker"], int(order["shares"])))
-        used = ["execute_buy"]
-    else:
-        payload = json.loads(execute_sell(order["ticker"], int(order["shares"])))
-        used = ["execute_sell"]
-    return format_trade_result(payload, email), used
 
 
 def _trade_payload(row: dict) -> dict:
@@ -483,7 +219,7 @@ def _pick_trade_payload(payloads: list[dict]) -> dict | None:
         tool = str(p.get("_tool") or "")
         if tool == "send_trade_email":
             continue
-        if p.get("side") in ("BUY", "SELL"):
+        if p.get("side") in ("BUY", "SELL", "TRANSFER"):
             return p
         if p.get("status") in ("ERROR", "NEED_RESERVE_CONFIRM", "CANCELLED"):
             return p
@@ -501,9 +237,7 @@ def compose_chat_reply(
     email: str,
     user_message: str,
 ) -> str:
-    """Цифры портфеля и остатков — только из учёта, не из текста модели."""
-    if asks_about_other_user(user_message, email):
-        return OTHER_USER_REPLY
+    """Цифры после тула — из учёта. Решение, какой тул жать, принимает агент."""
     used_set = set(used)
     payload = _pick_trade_payload(payloads)
     pending = snap.get("pending_reserve")
@@ -527,6 +261,13 @@ def compose_chat_reply(
             "Снять нехватку с резервного счёта? Напишите «да» или «нет»."
         )
 
+    if payload and payload.get("status") == "SUCCESS" and payload.get("side") == "TRANSFER":
+        return format_transfer(payload)
+    if payload and payload.get("status") == "ERROR" and payload.get("side") == "TRANSFER":
+        return format_transfer(payload)
+    if payload and payload.get("status") == "CANCELLED":
+        return str(payload.get("message") or "Покупка отменена, резерв не трогали.")
+
     if payload and payload.get("status") == "SUCCESS" and payload.get("side") == "SELL":
         return format_sell(payload, snap, email)
     if payload and payload.get("status") == "SUCCESS" and payload.get("side") == "BUY":
@@ -549,12 +290,7 @@ def compose_chat_reply(
         if row:
             return format_buy(_trade_payload(row), snap, email)
 
-    if is_trade_request(user_message) and "execute_buy" not in used_set and "execute_sell" not in used_set:
-        return (
-            "Сделка не записана: торговый тул не вызвался, в учёте ничего не менялось.\n"
-            f"{format_portfolio(snap)}"
-        )
-    if _CLAIM_RE.search(model_text or "") and "execute_buy" not in used_set and "execute_sell" not in used_set:
+    if _CLAIM_RE.search(model_text or "") and "execute_buy" not in used_set and "execute_sell" not in used_set and "confirm_reserve_purchase" not in used_set and "transfer_between" not in used_set:
         return (
             "Сделка не записана: в учёте ничего не менялось.\n"
             f"{format_portfolio(snap)}"

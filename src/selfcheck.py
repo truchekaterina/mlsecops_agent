@@ -20,7 +20,7 @@ from agent_mode_a import build_agent, last_text  # noqa: E402
 from auth import decode_jwt, load_store, login  # noqa: E402
 from ledger import clear_history, reset_book, snapshot  # noqa: E402
 from mail_store import list_messages  # noqa: E402
-from replies import compose_chat_reply, parse_trade_command  # noqa: E402
+from replies import compose_chat_reply  # noqa: E402
 
 LOG = DATA / "trades.log"
 
@@ -119,9 +119,6 @@ def check_direct_tools() -> None:
     assert katya["email"] == "katya@demo"
     assert snap["cash_usd"] == 2747.25
     assert katya["cash_usd"] != snap["cash_usd"]
-    assert parse_trade_command("купи 4 акции NVIDIA") == {"side": "BUY", "ticker": "NVDA", "shares": 4}
-    assert parse_trade_command("продай Apple") == {"side": "SELL", "ticker": "AAPL", "shares": 1}
-    assert parse_trade_command("почему ты не купил мне акции") is None
     print("  catalog / account / portfolio / buy / reserve / sell — OK")
     print("  trades.log:", kinds)
     print("  smtp_ok:", mail.get("smtp_ok"))
