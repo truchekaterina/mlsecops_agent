@@ -13,6 +13,7 @@ import time
 
 import ledger
 import mail_client
+import password_hash
 import store
 from paths import DATA
 
@@ -30,7 +31,7 @@ def _b64url_decode(text: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return password_hash.hash_password(password)
 
 
 def load_store() -> dict:
@@ -70,8 +71,9 @@ def find_user(store_snap: dict | None, login: str) -> dict | None:
 def register(name: str, email: str, password: str) -> dict:
     name = name.strip()
     email = email.strip().lower()
-    if not name or "@" not in email or len(password) < 3:
-        raise ValueError("Нужны имя, почта с @ и пароль от 3 символов.")
+    if not name or "@" not in email:
+        raise ValueError("Нужны имя и почта с @.")
+    password_hash.validate_password(password)
     try:
         exists = mail_client.mailbox_exists(email)
     except mail_client.MailUnavailable as exc:
@@ -85,23 +87,37 @@ def register(name: str, email: str, password: str) -> dict:
         exists = conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone()
         if exists:
             raise ValueError("На эту почту уже есть учётка. Войдите.")
+        stored = hash_password(password)
         conn.execute(
             """
             INSERT INTO users(email, name, password_sha256, created_at)
             VALUES(?, ?, ?, ?)
             """,
-            (email, name, hash_password(password), store.now_iso()),
+            (email, name, stored, store.now_iso()),
         )
     ledger.ensure_account(email)
-    return {"email": email, "name": name, "password_sha256": hash_password(password)}
+    return {"email": email, "name": name}
+
+
+def _store_hash(email: str, stored: str) -> None:
+    with store.db() as conn:
+        conn.execute(
+            "UPDATE users SET password_sha256=? WHERE email=?",
+            (stored, email),
+        )
 
 
 def check_password(user: dict, password: str) -> bool:
     expected = str(user.get("password_sha256") or "")
-    if expected:
-        return hmac.compare_digest(expected, hash_password(password))
-    plain = str(user.get("password") or "")
-    return hmac.compare_digest(plain, password)
+    ok = password_hash.password_matches(expected, password)
+    if not ok:
+        plain = str(user.get("password") or "")
+        ok = bool(plain) and hmac.compare_digest(plain, password)
+    if not ok:
+        return False
+    if password_hash.needs_rehash(expected):
+        _store_hash(user["email"], hash_password(password))
+    return True
 
 
 def issue_jwt(user: dict, secret: str) -> str:

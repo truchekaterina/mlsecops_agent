@@ -6,3 +6,4 @@ mcp
 fastmcp
 fastapi
 uvicorn
+argon2-cffi

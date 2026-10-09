@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+import password_hash
 from paths import DATA
 
 DB_PATH = DATA / "mail.db"
@@ -42,7 +42,7 @@ def now_iso() -> str:
 
 
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return password_hash.hash_password(password)
 
 
 def connect() -> sqlite3.Connection:
@@ -119,8 +119,7 @@ def create_mailbox(email: str, password: str) -> dict:
     email = email.strip().lower()
     if "@" not in email or email.startswith("@") or email.endswith("@") or len(email) < 3:
         raise ValueError("Нужна почта с @.")
-    if len(password) < 3:
-        raise ValueError("Пароль ящика — от 3 символов.")
+    password_hash.validate_password(password)
     if mailbox_exists(email):
         raise ValueError("Такая почта уже заведена. Войдите в ящик.")
     created = now_iso()

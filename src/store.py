@@ -221,10 +221,10 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
     n = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
     if n:
         return
-    from hashlib import sha256
+    from password_hash import hash_password
 
     def hp(p: str) -> str:
-        return sha256(p.encode("utf-8")).hexdigest()
+        return hash_password(p)
 
     for email, name, password in (
         ("client@demo", "Клиент", "demo"),

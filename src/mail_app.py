@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import mail_store
+import password_hash
 from paths import STATIC
 
 SECRET = os.environ.get("STRAZH_MAIL_SECRET", "strazh-mail-demo")
@@ -27,7 +28,7 @@ app = FastAPI(title="Почта Стража", version="1")
 
 class MailboxIn(BaseModel):
     email: str = Field(min_length=3, max_length=120)
-    password: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=8, max_length=120)
 
 
 class LoginIn(BaseModel):
@@ -128,9 +129,14 @@ async def api_login(body: LoginIn):
     box = mail_store.find_mailbox(body.email)
     if box is None:
         raise HTTPException(401, "Такого ящика нет. Сначала заведите почту.")
-    digest = mail_store.hash_password(body.password)
-    if not hmac.compare_digest(box["password_sha256"], digest):
+    if not password_hash.password_matches(box["password_sha256"], body.password):
         raise HTTPException(401, "Неверный пароль ящика")
+    if password_hash.needs_rehash(box["password_sha256"]):
+        with mail_store.db() as conn:
+            conn.execute(
+                "UPDATE mailboxes SET password_sha256=? WHERE email=?",
+                (password_hash.hash_password(body.password), box["email"]),
+            )
     token = _issue(box["email"])
     resp = JSONResponse({"email": box["email"], "token": token})
     resp.set_cookie("mail_token", token, httponly=True, samesite="lax", max_age=TTL_HOURS * 3600)
