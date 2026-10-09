@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from mcp.server.fastmcp import FastMCP
 
 import cbr_rates
+import action_hash
 import ledger
 import mail_client
 from paths import DATA
@@ -47,10 +48,17 @@ def _client_profile() -> tuple[str, str]:
 
 
 def _log(kind: str, payload: dict) -> None:
+    hidden = {}
+    for key, value in payload.items():
+        if key in {"client", "to", "email_to", "email"} and isinstance(value, str) and "@" in value:
+            hidden[key] = action_hash.actor_hash(value)
+        else:
+            hidden[key] = value
     rec = {
         "time": datetime.now(timezone.utc).isoformat(),
         "kind": kind,
-        **payload,
+        "action_hash": action_hash.action_digest({"kind": kind, **hidden}),
+        **hidden,
     }
     with LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")

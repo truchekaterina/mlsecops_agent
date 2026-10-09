@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import password_hash
+import action_hash
 from paths import DATA
 
 DB_PATH = DATA / "mail.db"
@@ -77,11 +78,18 @@ def init() -> None:
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            _ensure_action_hash(conn)
             _seed(conn)
             conn.commit()
         finally:
             conn.close()
         _ready = True
+
+
+def _ensure_action_hash(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "action_hash" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN action_hash TEXT")
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -143,36 +151,74 @@ def deliver(
     side: str = "",
     ticker: str = "",
 ) -> dict:
-    key = email.strip().lower()
-    if not mailbox_exists(key):
+    owner = email.strip().lower()
+    stored_email = action_hash.actor_hash(owner, secret=action_hash.mail_secret())
+    digest = action_hash.action_digest(
+        {
+            "email": stored_email,
+            "confirmation_id": confirmation_id,
+            "side": side,
+            "ticker": ticker,
+            "subject": subject,
+        },
+        secret=action_hash.mail_secret(),
+    )
+    if not mailbox_exists(owner):
         raise ValueError("Такого ящика нет.")
     with db() as conn:
         cur = conn.execute(
             """
             INSERT INTO messages(
-              email, confirmation_id, side, ticker, subject, body, created_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?)
+              email, confirmation_id, side, ticker, subject, body, created_at, action_hash
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (key, confirmation_id or None, side or None, ticker or None, subject, body, now_iso()),
+            (
+                stored_email,
+                confirmation_id or None,
+                side or None,
+                ticker or None,
+                subject,
+                body,
+                now_iso(),
+                digest,
+            ),
         )
         mid = int(cur.lastrowid)
         row = conn.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
-    return dict(row)
+    saved = dict(row)
+    saved["email"] = owner
+    return saved
+
+
+def _mail_keys(email: str) -> tuple[str, str]:
+    owner = email.strip().lower()
+    return action_hash.actor_hash(owner, secret=action_hash.mail_secret()), owner
 
 
 def list_messages(email: str, limit: int = 30) -> list[dict]:
+    hashed, owner = _mail_keys(email)
     with db() as conn:
         rows = conn.execute(
-            "SELECT * FROM messages WHERE email=? ORDER BY id DESC LIMIT ?",
-            (email.strip().lower(), int(limit)),
+            "SELECT * FROM messages WHERE email=? OR email=? ORDER BY id DESC LIMIT ?",
+            (hashed, owner, int(limit)),
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["email"] = owner
+        out.append(item)
+    return out
 
 
 def get_message(email: str, message_id: int) -> dict | None:
+    hashed, owner = _mail_keys(email)
     with db() as conn:
         row = conn.execute(
-            "SELECT * FROM messages WHERE id=? AND email=?",
-            (int(message_id), email.strip().lower()),
+            "SELECT * FROM messages WHERE id=? AND (email=? OR email=?)",
+            (int(message_id), hashed, owner),
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    item = dict(row)
+    item["email"] = owner
+    return item

@@ -87,6 +87,13 @@ CREATE INDEX IF NOT EXISTS idx_messages_email ON messages(email, id);
 """
 
 
+def _ensure_action_hash(conn: sqlite3.Connection) -> None:
+    for table in ("trades", "messages"):
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "action_hash" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN action_hash TEXT")
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -125,6 +132,7 @@ def init() -> None:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
             conn.commit()
+            _ensure_action_hash(conn)
             _migrate_json(conn)
             _seed_if_empty(conn)
             _backfill_mailboxes(conn)

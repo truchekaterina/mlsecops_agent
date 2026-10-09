@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from typing import Callable
 
+import action_hash
 import moex_quotes
 import store
 
@@ -50,6 +52,10 @@ def empty_book() -> dict:
 
 def _key(email: str) -> str:
     return (email or "").strip().lower()
+
+
+def _actor(email: str) -> str:
+    return action_hash.actor_hash(_key(email))
 
 
 def _normalize(book: dict) -> dict:
@@ -209,17 +215,32 @@ def record_trade(
     cash_usd: float | None = None,
     reserve_usd: float | None = None,
 ) -> None:
+    owner = _key(email)
+    stored_email = _actor(owner)
+    digest = action_hash.action_digest(
+        {
+            "email": stored_email,
+            "kind": kind,
+            "confirmation_id": confirmation_id,
+            "ticker": ticker,
+            "shares": shares,
+            "usd_amount": usd_amount,
+            "reserved_usd": reserved_usd,
+            "cash_usd": cash_usd,
+            "reserve_usd": reserve_usd,
+        }
+    )
     with store.db() as conn:
         conn.execute(
             """
             INSERT INTO trades(
               confirmation_id, email, kind, ticker, shares, usd_amount,
-              reserved_usd, cash_usd, reserve_usd, created_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              reserved_usd, cash_usd, reserve_usd, created_at, action_hash
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 confirmation_id,
-                _key(email),
+                stored_email,
                 kind,
                 ticker,
                 shares,
@@ -228,13 +249,13 @@ def record_trade(
                 cash_usd,
                 reserve_usd,
                 store.now_iso(),
+                digest,
             ),
         )
 
 
-def last_trade(email: str, kinds: tuple[str, ...] | None = None) -> dict | None:
-    key = _key(email)
-    with store.db() as conn:
+def _trade_row(conn, email: str, kinds: tuple[str, ...] | None) -> sqlite3.Row | None:
+    for key in (_actor(email), _key(email)):
         if kinds:
             placeholders = ",".join("?" * len(kinds))
             row = conn.execute(
@@ -250,25 +271,43 @@ def last_trade(email: str, kinds: tuple[str, ...] | None = None) -> dict | None:
                 "SELECT * FROM trades WHERE email=? ORDER BY id DESC LIMIT 1",
                 (key,),
             ).fetchone()
+        if row:
+            return row
+    return None
+
+
+def last_trade(email: str, kinds: tuple[str, ...] | None = None) -> dict | None:
+    owner = _key(email)
+    with store.db() as conn:
+        row = _trade_row(conn, owner, kinds)
     if not row:
         return None
-    return dict(row)
+    data = dict(row)
+    data["email"] = owner
+    return data
 
 
 def trade_kinds(email: str) -> list[str]:
+    owner = _key(email)
     with store.db() as conn:
         rows = conn.execute(
-            "SELECT kind FROM trades WHERE email=? ORDER BY id",
-            (_key(email),),
+            "SELECT kind FROM trades WHERE email=? OR email=? ORDER BY id",
+            (_actor(owner), owner),
         ).fetchall()
     return [str(r["kind"]) for r in rows]
 
 
 def clear_history(email: str) -> None:
-    key = _key(email)
+    owner = _key(email)
     with store.db() as conn:
-        conn.execute("DELETE FROM trades WHERE email=?", (key,))
-        conn.execute("DELETE FROM messages WHERE email=?", (key,))
+        conn.execute(
+            "DELETE FROM trades WHERE email=? OR email=?",
+            (_actor(owner), owner),
+        )
+        conn.execute(
+            "DELETE FROM messages WHERE email=? OR email=?",
+            (_actor(owner), owner),
+        )
 
 
 def record_message(
@@ -282,17 +321,28 @@ def record_message(
     smtp_ok: bool,
     smtp_error: str = "",
 ) -> int:
+    owner = _key(email)
+    stored_email = _actor(owner)
+    digest = action_hash.action_digest(
+        {
+            "email": stored_email,
+            "confirmation_id": confirmation_id,
+            "side": side,
+            "ticker": ticker,
+            "subject": subject,
+        }
+    )
     with store.db() as conn:
         cur = conn.execute(
             """
             INSERT INTO messages(
               confirmation_id, email, side, ticker, subject, body,
-              smtp_ok, smtp_error, created_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+              smtp_ok, smtp_error, created_at, action_hash
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 confirmation_id,
-                _key(email),
+                stored_email,
                 side,
                 ticker,
                 subject,
@@ -300,27 +350,37 @@ def record_message(
                 1 if smtp_ok else 0,
                 smtp_error or None,
                 store.now_iso(),
+                digest,
             ),
         )
         return int(cur.lastrowid)
 
 
 def last_messages(email: str, limit: int = 10) -> list[dict]:
+    owner = _key(email)
     with store.db() as conn:
         rows = conn.execute(
-            "SELECT * FROM messages WHERE email=? ORDER BY id DESC LIMIT ?",
-            (_key(email), limit),
+            "SELECT * FROM messages WHERE email=? OR email=? ORDER BY id DESC LIMIT ?",
+            (_actor(owner), owner, limit),
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["email"] = owner
+        out.append(item)
+    return out
 
 
 def get_message(email: str, message_id: int) -> dict | None:
     """Письмо только своего ящика. Чужой id не отдаём."""
+    owner = _key(email)
     with store.db() as conn:
         row = conn.execute(
-            "SELECT * FROM messages WHERE id=? AND email=?",
-            (int(message_id), _key(email)),
+            "SELECT * FROM messages WHERE id=? AND (email=? OR email=?)",
+            (int(message_id), _actor(owner), owner),
         ).fetchone()
     if not row:
         return None
-    return dict(row)
+    item = dict(row)
+    item["email"] = owner
+    return item
