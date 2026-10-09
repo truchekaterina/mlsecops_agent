@@ -28,7 +28,7 @@ def format_holdings(snap: dict) -> str:
     if not pos:
         return "В портфеле нет купленных акций."
     lines = [
-        f"- {p['name']} ({p['ticker']}): {p['shares']} шт., стоимость ${p['value_usd']}"
+        f"- {p['name']} ({p['ticker']}): {p['shares']} шт., стоимость {p['value_usd']} ₽"
         for p in pos
         if int(p.get("shares") or 0) > 0
     ]
@@ -41,8 +41,8 @@ def format_portfolio(snap: dict) -> str:
     body = format_holdings(snap)
     return (
         f"{body}\n"
-        f"Оценка позиций: {snap.get('positions_usd', 0)} $.\n"
-        f"Основной счёт: {snap.get('cash_usd', 0)} $, резерв: {snap.get('reserve_usd', 0)} $."
+        f"Оценка позиций: {snap.get('positions_usd', 0)} ₽.\n"
+        f"Основной счёт: {snap.get('cash_usd', 0)} ₽, резерв: {snap.get('reserve_usd', 0)} ₽."
     )
 
 
@@ -59,13 +59,13 @@ def format_sell(payload: dict, snap: dict, email: str) -> str:
     left = _left(snap, str(ticker or ""))
     return (
         f"Вы продали {payload.get('shares')} акции {ticker}. "
-        f"Сумма продажи составила ${payload.get('usd_amount')}. "
+        f"Сумма продажи составила {payload.get('usd_amount')} ₽. "
         f"Деньги зачислены на основной счёт.\n"
         f"Ваш текущий портфель выглядит так:\n\n"
         f"{format_holdings(snap)}\n\n"
         f"Осталось {ticker}: {left} шт.\n"
-        f"Ваш текущий остаток на основном счёте составляет ${snap.get('cash_usd')}, "
-        f"а резерв в размере ${snap.get('reserve_usd')}.\n"
+        f"Ваш текущий остаток на основном счёте составляет {snap.get('cash_usd')} ₽, "
+        f"а резерв в размере {snap.get('reserve_usd')} ₽.\n"
         f"Письмо «Продано» отправлено в почтовый сервис на {email}."
     )
 
@@ -74,17 +74,17 @@ def format_buy(payload: dict, snap: dict, email: str | None = None) -> str:
     extra = ""
     reserved = payload.get("reserved_from_reserve_usd") or 0
     if reserved:
-        extra = f" С резерва снято {reserved} $."
+        extra = f" С резерва снято {reserved} ₽."
     mail = ""
     if email:
         mail = f"\nПисьмо «Куплено» отправлено в почтовый сервис на {email}."
     return (
         f"Вы купили {payload.get('shares')} акцию {payload.get('ticker')}. "
-        f"Стоимость покупки составила ${payload.get('usd_amount')}.{extra}\n"
+        f"Стоимость покупки составила {payload.get('usd_amount')} ₽.{extra}\n"
         f"Ваш текущий портфель выглядит так:\n\n"
         f"{format_holdings(snap)}\n\n"
-        f"Ваш текущий остаток на основном счёте составляет ${snap.get('cash_usd')}, "
-        f"а резерв в размере ${snap.get('reserve_usd')}."
+        f"Ваш текущий остаток на основном счёте составляет {snap.get('cash_usd')} ₽, "
+        f"а резерв в размере {snap.get('reserve_usd')} ₽."
         f"{mail}"
     )
 
@@ -187,14 +187,14 @@ def format_transfer(payload: dict) -> str:
         else:
             mail = f"\nПеревод записан, письмо не доставлено: {payload.get('mail_error') or 'почтовый сервис недоступен'}."
     return (
-        f"Переведено {payload.get('transferred')} $ с {src} на {dst}.\n"
-        f"Основной: {payload.get('cash_usd')} $. Резерв: {payload.get('reserve_usd')} $."
+        f"Переведено {payload.get('transferred')} ₽ с {src} на {dst}.\n"
+        f"Основной: {payload.get('cash_usd')} ₽. Резерв: {payload.get('reserve_usd')} ₽."
         f"{mail}"
     )
 
 
 _CLAIM_RE = re.compile(
-    r"вы\s+(купили|продали)|сумма\s+покупки|стоимость\s+покупки|письмо\s+[«\"]куплено|перевед",
+    r"вы\s+(купили|продали)|сумма\s+покупки|стоимость\s+покупки|письмо\s+[«\"]куплено|перевед|вызван тул|status\s*=\s*success",
     re.IGNORECASE,
 )
 
@@ -219,12 +219,40 @@ def _pick_trade_payload(payloads: list[dict]) -> dict | None:
         tool = str(p.get("_tool") or "")
         if tool == "send_trade_email":
             continue
-        if p.get("side") in ("BUY", "SELL", "TRANSFER"):
+        if p.get("side") in ("BUY", "SELL", "TRANSFER", "SELL_ALL"):
             return p
         if p.get("status") in ("ERROR", "NEED_RESERVE_CONFIRM", "CANCELLED"):
             return p
         if tool in ("execute_buy", "execute_sell"):
             return p
+    return None
+
+
+def _market_reply(used: list[str], payloads: list[dict], snap: dict) -> str | None:
+    """Каталог, счёт и портфель — из тула, в рублях."""
+    trade = {"execute_buy", "execute_sell", "sell_all", "confirm_reserve_purchase", "deny_reserve_purchase", "transfer_between"}
+    if trade.intersection(used):
+        return None
+    for name in reversed(used):
+        if name == "list_instruments":
+            payload = next((p for p in payloads if p.get("instruments")), None)
+            lines = ["Доступные акции Мосбиржи:"]
+            for row in (payload or {}).get("instruments") or []:
+                price = row.get("price_rub")
+                if price is None:
+                    lines.append(f"- {row.get('name')} ({row.get('ticker')}): котировки нет")
+                else:
+                    note = f", {row.get('price_note')}" if row.get("price_note") else ""
+                    lines.append(f"- {row.get('name')} ({row.get('ticker')}): {price} ₽{note}")
+            return "\n".join(lines) if len(lines) > 1 else None
+        if name == "get_portfolio":
+            return format_portfolio(snap)
+        if name == "get_account":
+            return (
+                f"Основной счёт: {snap.get('cash_usd', 0)} ₽.\n"
+                f"Резерв: {snap.get('reserve_usd', 0)} ₽.\n"
+                f"Бумаги:\n{format_holdings(snap)}"
+            )
     return None
 
 
@@ -255,9 +283,9 @@ def compose_chat_reply(
     if payload and payload.get("status") == "NEED_RESERVE_CONFIRM" and pending:
         p = pending
         return (
-            f"На основном счёте {p['cash_usd']} $, резерв {p['reserve_usd']} $. "
-            f"Покупка {p['shares']} {p['ticker']} стоит {p['need_usd']} $ "
-            f"(не хватает {p['shortfall_usd']} $). "
+            f"На основном счёте {p['cash_usd']} ₽, резерв {p['reserve_usd']} ₽. "
+            f"Покупка {p['shares']} {p['ticker']} стоит {p['need_usd']} ₽ "
+            f"(не хватает {p['shortfall_usd']} ₽). "
             "Снять нехватку с резервного счёта? Напишите «да» или «нет»."
         )
 
@@ -268,6 +296,29 @@ def compose_chat_reply(
     if payload and payload.get("status") == "CANCELLED":
         return str(payload.get("message") or "Покупка отменена, резерв не трогали.")
 
+    if payload and payload.get("side") == "SELL_ALL":
+        if payload.get("status") != "SUCCESS":
+            return str(payload.get("error") or "Продажа не выполнена.")
+        lines = [
+            f"Вы продали {p.get('shares')} акции {p.get('ticker')} на {p.get('usd_amount')} ₽."
+            for p in (payload.get("sales") or [])
+        ]
+        lines.append(format_portfolio(snap))
+        lines.append(f"Письма «Продано» отправлены в почтовый сервис на {email}.")
+        return "\n".join(lines)
+
+    sells = [
+        p for p in payloads
+        if p.get("status") == "SUCCESS" and p.get("side") == "SELL"
+    ]
+    if len(sells) > 1:
+        lines = [
+            f"Вы продали {p.get('shares')} акции {p.get('ticker')} на {p.get('usd_amount')} ₽."
+            for p in sells
+        ]
+        lines.append(format_portfolio(snap))
+        lines.append(f"Письма «Продано» отправлены в почтовый сервис на {email}.")
+        return "\n".join(lines)
     if payload and payload.get("status") == "SUCCESS" and payload.get("side") == "SELL":
         return format_sell(payload, snap, email)
     if payload and payload.get("status") == "SUCCESS" and payload.get("side") == "BUY":
@@ -281,18 +332,24 @@ def compose_chat_reply(
         if pending:
             p = pending
             return (
-                f"На основном счёте {p['cash_usd']} $, резерв {p['reserve_usd']} $. "
-                f"Покупка {p['shares']} {p['ticker']} стоит {p['need_usd']} $ "
-                f"(не хватает {p['shortfall_usd']} $). "
+                f"На основном счёте {p['cash_usd']} ₽, резерв {p['reserve_usd']} ₽. "
+                f"Покупка {p['shares']} {p['ticker']} стоит {p['need_usd']} ₽ "
+                f"(не хватает {p['shortfall_usd']} ₽). "
                 "Снять нехватку с резервного счёта? Напишите «да» или «нет»."
             )
         row = _fresh_trade(last_trade(email, ("BUY",)))
         if row:
             return format_buy(_trade_payload(row), snap, email)
 
-    if _CLAIM_RE.search(model_text or "") and "execute_buy" not in used_set and "execute_sell" not in used_set and "confirm_reserve_purchase" not in used_set and "transfer_between" not in used_set:
+    info = _market_reply(used, payloads, snap)
+    if info:
+        return info
+
+    if _CLAIM_RE.search(model_text or "") and "execute_buy" not in used_set and "execute_sell" not in used_set and "sell_all" not in used_set and "confirm_reserve_purchase" not in used_set and "transfer_between" not in used_set:
         return (
             "Сделка не записана: в учёте ничего не менялось.\n"
             f"{format_portfolio(snap)}"
         )
+    if not (model_text or "").strip():
+        return "Повторите, что купить, продать или перевести."
     return model_text

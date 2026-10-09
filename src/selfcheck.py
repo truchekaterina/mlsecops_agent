@@ -58,7 +58,10 @@ def check_direct_tools() -> None:
     reset_book("client@demo")
     clear_history("client@demo")
     inst = json.loads(tools.list_instruments())
-    assert inst["status"] == "SUCCESS" and any(x["ticker"] == "NVDA" for x in inst["instruments"]), inst
+    sber = next((x for x in inst["instruments"] if x["ticker"] == "SBER"), None)
+    assert inst["status"] == "SUCCESS" and sber and sber.get("price_rub"), inst
+    price = float(sber["price_rub"])
+    shares = int(2000 // price) + 1
     cur = json.loads(tools.list_currencies())
     codes = {x["char_code"] for x in cur["currencies"]}
     assert codes >= {"USD", "EUR", "CNY"}, cur
@@ -66,31 +69,30 @@ def check_direct_tools() -> None:
     assert acc["cash_usd"] == 2000.0 and acc["reserve_usd"] == 5000.0, acc
     port0 = json.loads(tools.get_portfolio())
     assert port0["empty"] is True, port0
-    ask = json.loads(tools.execute_buy("NVDA", 3))
+    ask = json.loads(tools.execute_buy("SBER", shares))
     assert ask["status"] == "NEED_RESERVE_CONFIRM", ask
-    assert ask["shortfall_usd"] == 747.25, ask
+    assert ask["shortfall_usd"] > 0, ask
     buy = json.loads(tools.confirm_reserve_purchase())
     assert buy["status"] == "SUCCESS", buy
-    assert buy["reserved_from_reserve_usd"] == 747.25, buy
     assert buy["cash_usd"] == 0.0, buy
-    huge = json.loads(tools.execute_buy("NVDA", 1000))
+    huge = json.loads(tools.execute_buy("SBER", int(7000 // price) + 5))
     assert huge["status"] == "ERROR", huge
     assert huge.get("missing_usd", 0) > 0, huge
     assert "пополнить" in (huge.get("message") or ""), huge
     port = json.loads(tools.get_portfolio())
-    nvda = next(p for p in port["positions"] if p["ticker"] == "NVDA")
-    assert nvda["shares"] == 3, port
-    sell_bad = json.loads(tools.execute_sell("NVDA", 1000))
+    held = next(p for p in port["positions"] if p["ticker"] == "SBER")
+    assert held["shares"] == shares, port
+    sell_bad = json.loads(tools.execute_sell("SBER", 1000))
     assert sell_bad["status"] == "ERROR", sell_bad
-    sell = json.loads(tools.execute_sell("NVDA", 3))
+    sell = json.loads(tools.execute_sell("SBER", shares))
     assert sell["status"] == "SUCCESS", sell
     assert sell["position"] == 0, sell
-    assert sell["cash_usd"] == 2747.25, sell
+    assert sell["cash_usd"] > 0, sell
     assert sell.get("email_to") == "client@demo", sell
     mail = json.loads(
         tools.send_trade_email(
             side="SELL",
-            ticker="NVDA",
+            ticker="SBER",
             shares=3,
             usd_amount=sell["usd_amount"],
             confirmation_id=sell["confirmation_id"],
@@ -117,7 +119,7 @@ def check_direct_tools() -> None:
     assert "6 шт" not in fake, fake
     katya = snapshot("katya@demo")
     assert katya["email"] == "katya@demo"
-    assert snap["cash_usd"] == 2747.25
+    assert snap["cash_usd"] > 0
     assert katya["cash_usd"] != snap["cash_usd"]
     print("  catalog / account / portfolio / buy / reserve / sell — OK")
     print("  trades.log:", kinds)
@@ -151,7 +153,7 @@ async def check_agent(session: dict) -> None:
         ),
         (
             "buy",
-            "Купи 3 NVDA",
+            "Купи 1 акцию Сбербанка",
         ),
         (
             "fx",

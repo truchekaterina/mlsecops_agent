@@ -144,7 +144,7 @@
         </div>
       </div>
       <form id="composer">
-        <input id="q" placeholder="Например: Купи 3 NVDA" autocomplete="off" />
+        <input id="q" placeholder="Например: Купи 1 акцию Сбербанка" autocomplete="off" />
         <button type="submit">Отправить</button>
       </form>
     </section>
@@ -181,7 +181,7 @@
     function fmtAcc(acc) {
       if (!acc) return "";
       const pos = (acc.positions || []).map((p) => p.ticker + " " + p.shares + " шт.").join(", ") || "бумаг нет";
-      return "Основной: " + acc.cash_usd + " $ · Резерв: " + acc.reserve_usd + " $ · " + pos;
+      return "Основной: " + acc.cash_usd + " ₽ · Резерв: " + acc.reserve_usd + " ₽ · " + pos;
     }
     function showChat(user) {
       resetChat();
@@ -285,7 +285,7 @@
     const askText = document.getElementById("ask-text");
     function showAsk(p) {
       if (!p) { askBox.classList.add("hidden"); return; }
-      askText.textContent = "Нехватка " + p.shortfall_usd + " $ для " + p.shares + " " + p.ticker + ". Снять с резерва?";
+      askText.textContent = "Нехватка " + p.shortfall_usd + " ₽ для " + p.shares + " " + p.ticker + ". Снять с резерва?";
       askBox.classList.remove("hidden");
     }
     async function sendChat(text) {

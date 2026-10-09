@@ -73,12 +73,21 @@ def _send_mail_silent(side: str, ticker: str, shares: int, usd: float, cid: str)
 
 @mcp.tool()
 def list_instruments() -> str:
-    """Список учебных акций, которые можно купить. Тикер для счёта не нужен."""
-    rows = [
-        {"ticker": t, "name": v["name"], "price_usd": v["price_usd"]}
-        for t, v in ledger.INSTRUMENTS.items()
-    ]
-    return _dump({"status": "SUCCESS", "instruments": rows})
+    """Список акций Мосбиржи, которые можно купить. Цена в рублях, с ISS. Тикер для счёта не нужен."""
+    rows = []
+    for ticker in ledger.INSTRUMENTS:
+        inst = ledger.instrument(ticker)
+        if not inst:
+            continue
+        rows.append(
+            {
+                "ticker": ticker,
+                "name": inst["name"],
+                "price_rub": inst["price_rub"],
+                "price_note": inst["price_note"],
+            }
+        )
+    return _dump({"status": "SUCCESS", "currency": "RUB", "instruments": rows})
 
 
 @mcp.tool()
@@ -125,6 +134,7 @@ def get_account() -> str:
 def get_portfolio() -> str:
     """Какие акции уже куплены у вошедшего клиента. Тикер не обязателен.
 
+    Если клиент просит продать все, shares для execute_sell бери из positions[].shares.
     Ты сам учебный управляющий, не отправляй к брокеру и не говори, что доступа нет.
     """
     email, name = _client_profile()
@@ -163,17 +173,19 @@ def _insufficient_funds(book: dict, ticker: str, shares: int, usd: float) -> dic
         "missing_usd": missing,
         "reserve_shortfall_usd": reserve_need,
         "message": (
-            f"Покупка {shares} {ticker} стоит {usd} $. "
-            f"Основной счёт: {cash} $, резерв: {reserve} $ (вместе {have} $). "
-            f"Денег не хватает. Нужно пополнить на {missing} $ "
-            f"(для этой покупки на резерве не хватает ещё {reserve_need} $)."
+            f"Покупка {shares} {ticker} стоит {usd} ₽. "
+            f"Основной счёт: {cash} ₽, резерв: {reserve} ₽ (вместе {have} ₽). "
+            f"Денег не хватает. Нужно пополнить на {missing} ₽ "
+            f"(для этой покупки на резерве не хватает ещё {reserve_need} ₽)."
         ),
     }
 
 
 def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
     inst = ledger.instrument(ticker)
-    usd = round(shares * inst["price_usd"], 2)
+    if not inst or inst.get("price_rub") is None:
+        return _dump({"status": "ERROR", "error": "нет котировки Мосбиржи, покупка не записана"})
+    usd = round(shares * float(inst["price_rub"]), 2)
     book = ledger.get_book(email)
     shortfall = round(max(0.0, usd - book["cash_usd"]), 2)
     if book["cash_usd"] + book["reserve_usd"] + 1e-9 < usd:
@@ -222,8 +234,8 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
                 "reserve_usd": book["reserve_usd"],
                 "shortfall_usd": shortfall,
                 "message": (
-                    f"На основном счёте {book['cash_usd']} $, резерв {book['reserve_usd']} $. "
-                    f"Покупка {shares} {ticker} стоит {usd} $ (не хватает {shortfall} $). "
+                    f"На основном счёте {book['cash_usd']} ₽, резерв {book['reserve_usd']} ₽. "
+                    f"Покупка {shares} {ticker} стоит {usd} ₽ (не хватает {shortfall} ₽). "
                     "Снять нехватку с резервного счёта? Напишите да или нет."
                 ),
             }
@@ -323,18 +335,24 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
             "position": after["positions"].get(ticker, 0),
             "email_to": email,
             "positions": snap["positions"],
-            "note": "usd_amount — цена сделки, cash_usd — остаток после покупки",
+            "note": "usd_amount и cash_usd в этом JSON — рубли. Клиенту говори ₽, не доллары.",
         }
     )
 
 
 @mcp.tool()
 def execute_buy(ticker: str, shares: int) -> str:
-    """Учебная покупка с основного счёта. Если денег мало — НЕ трогай резерв, верни NEED_RESERVE_CONFIRM и жди «да».
+    """Купить акции этого клиента с основного счёта. Цена в рублях берётся с Мосбиржи в момент вызова.
+
+    Сбер, сбера, сберу → SBER. Газпром → GAZP. Лукойл → LKOH. Норникель, норникеля → GMKN. Роснефть → ROSN. Яндекс → YDEX.
+    «купи 4 акции сбера» → ticker=SBER, shares=4. Если число не названо («купи акцию»), shares = 1.
+    Нулевой резерв и выход из почты не повод отказывать: решит этот тул.
+    Если денег на основном мало — не трогай резерв, верни NEED_RESERVE_CONFIRM и жди «да».
+    Не пиши, что покупка прошла, пока ответ не SUCCESS.
 
     Args:
-        ticker: тикер из list_instruments, например NVDA
-        shares: число акций
+        ticker: SBER, GAZP, LKOH, GMKN, ROSN или YDEX
+        shares: целое число акций, по умолчанию 1
     """
     ticker = ticker.upper().strip()
     shares = int(shares)
@@ -399,11 +417,14 @@ def deny_reserve_purchase() -> str:
 
 @mcp.tool()
 def execute_sell(ticker: str, shares: int) -> str:
-    """Учебная продажа своих акций. Нельзя продать больше, чем в портфеле.
+    """Продать названное число акций одного тикера. Цена в рублях с Мосбиржи в момент вызова. Не для «продай все» — для этого sell_all.
+
+    Сбер, сбера → SBER. Газпром → GAZP. Лукойл → LKOH. Норникель, норникеля → GMKN. Роснефть → ROSN. Яндекс → YDEX.
+    «продай 4 акции сбера» → ticker=SBER, shares=4. «продай акцию» без числа → shares = 1.
 
     Args:
-        ticker: тикер, например NVDA
-        shares: число акций
+        ticker: SBER, GAZP, LKOH, GMKN, ROSN или YDEX
+        shares: сколько продать
     """
     ticker = ticker.upper().strip()
     shares = int(shares)
@@ -431,7 +452,9 @@ def execute_sell(ticker: str, shares: int) -> str:
                 "hint": "вызови get_portfolio и скажи клиенту, сколько есть. Не отправляй к брокеру.",
             }
         )
-    usd = round(shares * inst["price_usd"], 2)
+    if not inst or inst.get("price_rub") is None:
+        return _dump({"status": "ERROR", "error": "нет котировки Мосбиржи, продажа не записана"})
+    usd = round(shares * float(inst["price_rub"]), 2)
 
     def _sell(b: dict) -> dict:
         b["positions"][ticker] = int(b["positions"].get(ticker, 0)) - shares
@@ -477,6 +500,51 @@ def execute_sell(ticker: str, shares: int) -> str:
             "position": after["positions"].get(ticker, 0),
             "email_to": email_to,
             "positions": snap["positions"],
+        }
+    )
+
+
+@mcp.tool()
+def sell_all() -> str:
+    """Продать все акции портфеля. Единственный тул для «продай все», «все мои акции», «весь портфель».
+
+    Вызывай сразу, без get_portfolio и без execute_sell. Число акций не передаётся.
+    """
+    email, _name = _client_profile()
+    book = ledger.get_book(email)
+    held = [(ticker, int(shares)) for ticker, shares in book["positions"].items() if int(shares) > 0]
+    if not held:
+        return _dump(
+            {
+                "status": "ERROR",
+                "side": "SELL_ALL",
+                "error": "В портфеле нет акций, продавать нечего.",
+                "cash_usd": book["cash_usd"],
+                "reserve_usd": book["reserve_usd"],
+            }
+        )
+    sales = []
+    for ticker, shares in held:
+        row = json.loads(execute_sell(ticker, shares))
+        if row.get("status") == "SUCCESS":
+            sales.append(
+                {
+                    "ticker": row.get("ticker"),
+                    "shares": row.get("shares"),
+                    "usd_amount": row.get("usd_amount"),
+                    "confirmation_id": row.get("confirmation_id"),
+                }
+            )
+    snap = ledger.snapshot(email)
+    return _dump(
+        {
+            "status": "SUCCESS" if sales else "ERROR",
+            "side": "SELL_ALL",
+            "sales": sales,
+            "cash_usd": snap["cash_usd"],
+            "reserve_usd": snap["reserve_usd"],
+            "positions": snap["positions"],
+            "error": None if sales else "Продажа не выполнена.",
         }
     )
 
@@ -580,7 +648,7 @@ def transfer_between_tool(source: str, target: str, amount: float) -> str:
     Args:
         source: откуда: cash или reserve
         target: куда: cash или reserve
-        amount: сумма в долларах
+        amount: сумма в рублях
     """
     return _dump(transfer_between(source, target, amount))
 
@@ -601,9 +669,9 @@ def _mail_transfer(
     subject = "Перевод между счетами"
     body = (
         f"Здравствуйте, {name or 'Клиент'}.\n\n"
-        f"Переведено {amount} $ с {src} на {dst}.\n"
-        f"Основной счёт: {cash_usd} $\n"
-        f"Резерв: {reserve_usd} $\n"
+        f"Переведено {amount} ₽ с {src} на {dst}.\n"
+        f"Основной счёт: {cash_usd} ₽\n"
+        f"Резерв: {reserve_usd} ₽\n"
         f"Номер подтверждения: {confirmation_id}\n"
         "Это учебное письмо, живых денег нет.\n"
     )
@@ -628,7 +696,7 @@ def request_reserve_funds(amount: float) -> str:
     """Перевести сумму с резервного счёта на основной.
 
     Args:
-        amount: сколько долларов перевести
+        amount: сколько рублей перевести
     """
     return _dump(transfer_between("reserve", "cash", amount))
 
@@ -648,7 +716,7 @@ def send_trade_email(
         side: BUY или SELL
         ticker: тикер
         shares: число акций
-        usd_amount: сумма в долларах
+        usd_amount: сумма в рублях
         confirmation_id: учебный номер подтверждения
         rub_amount: сумма в рублях по курсу ЦБ, если известна
     """
@@ -659,8 +727,8 @@ def send_trade_email(
     body = (
         f"Здравствуйте, {name}.\n\n"
         f"{title} {shares} {ticker}.\n"
-        f"Сумма: {usd_amount} $\n"
-        f"В рублях по курсу ЦБ: {rub_amount or 'курс ЦБ недоступен'}\n"
+        f"Сумма: {usd_amount} ₽\n"
+        "Цена с Мосбиржи.\n"
         f"Номер подтверждения: {confirmation_id}\n"
         "Это учебное письмо, живых денег нет.\n"
     )

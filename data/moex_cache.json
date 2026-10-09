@@ -1,0 +1,53 @@
+{
+  "source": "iss.moex.com TQBR",
+  "rows": {
+    "SBER": {
+      "ticker": "SBER",
+      "name": "Сбербанк",
+      "shortname": "Сбербанк",
+      "price": 280.48,
+      "source": "LAST",
+      "price_note": "последняя сделка"
+    },
+    "GMKN": {
+      "ticker": "GMKN",
+      "name": "Норникель",
+      "shortname": "ГМКНорНик",
+      "price": 115.2,
+      "source": "LAST",
+      "price_note": "последняя сделка"
+    },
+    "ROSN": {
+      "ticker": "ROSN",
+      "name": "Роснефть",
+      "shortname": "Роснефть",
+      "price": 346.3,
+      "source": "LAST",
+      "price_note": "последняя сделка"
+    },
+    "LKOH": {
+      "ticker": "LKOH",
+      "name": "Лукойл",
+      "shortname": "ЛУКОЙЛ",
+      "price": 5608.0,
+      "source": "LAST",
+      "price_note": "последняя сделка"
+    },
+    "YDEX": {
+      "ticker": "YDEX",
+      "name": "Яндекс",
+      "shortname": "ЯНДЕКС",
+      "price": 3451.0,
+      "source": "LAST",
+      "price_note": "последняя сделка"
+    },
+    "GAZP": {
+      "ticker": "GAZP",
+      "name": "Газпром",
+      "shortname": "ГАЗПРОМ ао",
+      "price": 96.25,
+      "source": "LAST",
+      "price_note": "последняя сделка"
+    }
+  }
+}

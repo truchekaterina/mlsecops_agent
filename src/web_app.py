@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from paths import STATIC  # noqa: E402
 
-from agent_mode_a import build_agent, last_text, tool_json_payloads, tools_used  # noqa: E402
+from agent_mode_a import build_agent, history_text, last_text, tool_json_payloads, tools_used  # noqa: E402
 from auth import login, register, session_from_token  # noqa: E402
 from ledger import snapshot  # noqa: E402
 from store import DB_PATH  # noqa: E402
@@ -225,15 +225,16 @@ async def _chat_locked(session: dict, body: ChatIn):
     )
     used = tools_used(result)
     acc = snapshot(session["email"])
+    payloads = tool_json_payloads(result)
     text = compose_chat_reply(
         model_text=last_text(result),
         used=used,
-        payloads=tool_json_payloads(result),
+        payloads=payloads,
         snap=acc,
         email=session["email"],
         user_message=body.message,
     )
-    hist.append({"role": "assistant", "content": text})
+    hist.append({"role": "assistant", "content": history_text(text)})
     if len(hist) > 40:
         del hist[:-40]
     return _pack(session, text, used)

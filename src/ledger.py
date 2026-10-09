@@ -1,4 +1,4 @@
-"""Учебный кошелёк и каталог бумаг. Живой биржи нет. Правда — SQLite."""
+"""Учебный кошелёк. Каталог — акции Мосбиржи, цена в рублях приходит с ISS. Учёт — SQLite."""
 
 from __future__ import annotations
 
@@ -6,16 +6,13 @@ import json
 import threading
 from typing import Callable
 
+import moex_quotes
 import store
 
 DEFAULT_CASH = 2000.0
 DEFAULT_RESERVE = 5000.0
 
-INSTRUMENTS = {
-    "NVDA": {"name": "NVIDIA", "price_usd": 915.75},
-    "AAPL": {"name": "Apple", "price_usd": 189.50},
-    "MSFT": {"name": "Microsoft", "price_usd": 415.00},
-}
+INSTRUMENTS = {ticker: {"name": name} for ticker, name in moex_quotes.CATALOG.items()}
 
 CURRENCIES = {
     "USD": "доллар США",
@@ -27,7 +24,19 @@ _LOCK = threading.Lock()
 
 
 def instrument(ticker: str) -> dict | None:
-    return INSTRUMENTS.get(ticker.upper().strip())
+    ticker = (ticker or "").upper().strip()
+    meta = INSTRUMENTS.get(ticker)
+    if not meta:
+        return None
+    row = moex_quotes.quote(ticker)
+    price = None if not row else row.get("price")
+    return {
+        "name": meta["name"],
+        "price_usd": price,
+        "price_rub": price,
+        "price_source": None if not row else row.get("source"),
+        "price_note": None if not row else row.get("price_note"),
+    }
 
 
 def empty_book() -> dict:
@@ -124,7 +133,7 @@ def _write_book(conn, email: str, book: dict) -> None:
 
 
 def ensure_account(email: str) -> dict:
-    """Счёт нового пользователя: 2000 $ / 5000 $, пустой портфель."""
+    """Счёт нового пользователя: 2000 ₽ / 5000 ₽, пустой портфель."""
     return get_book(email)
 
 
@@ -163,16 +172,19 @@ def snapshot(email: str) -> dict:
     for ticker, shares in book["positions"].items():
         if shares <= 0:
             continue
-        inst = INSTRUMENTS[ticker]
-        value = round(shares * inst["price_usd"], 2)
+        inst = instrument(ticker) or {"name": ticker, "price_rub": None, "price_note": None}
+        price = inst.get("price_rub")
+        value = round(shares * float(price), 2) if price is not None else 0.0
         pos_usd += value
         positions.append(
             {
                 "ticker": ticker,
                 "name": inst["name"],
                 "shares": shares,
-                "price_usd": inst["price_usd"],
+                "price_usd": price,
+                "price_rub": price,
                 "value_usd": value,
+                "price_note": inst.get("price_note"),
             }
         )
     return {
