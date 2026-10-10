@@ -139,7 +139,6 @@ def list_currencies() -> str:
                 "currencies": [
                     {
                         "char_code": r["char_code"],
-                        "name": r["name"],
                         "nominal": r["nominal"],
                         "value_rub": r["value_rub"],
                     }
@@ -225,7 +224,24 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
     inst = ledger.instrument(ticker)
     if not inst or inst.get("price_rub") is None:
         return _dump({"status": "ERROR", "error": "нет котировки Мосбиржи, покупка не записана"})
-    usd = round(shares * float(inst["price_rub"]), 2)
+    if inst.get("doubtful") and not _from_ticket():
+        return _dump({"status": "ERROR", "error": "котировка сомнительна", "message": "Котировка сомнительна, покупка не записана."})
+    live = float(inst["price_rub"])
+    usd = round(shares * live, 2)
+    if _from_ticket():
+        pending = ledger.get_book(email).get("pending_reserve") or {}
+        frozen = pending.get("price_rub")
+        if frozen is None:
+            return _dump({"status": "ERROR", "error": "в заявке нет цены", "message": "Заявка без цены погашена. Напишите покупку ещё раз."})
+        frozen = float(frozen)
+        if frozen <= 0 or abs(live - frozen) / frozen > 0.02:
+            def _drop(b: dict) -> dict:
+                b["pending_reserve"] = None
+                return b
+
+            ledger.update_book(email, _drop)
+            return _dump({"status": "ERROR", "error": "котировка сомнительна", "message": "Цена уехала от заявки. Заявка погашена, напишите покупку ещё раз."})
+        usd = round(shares * frozen, 2)
     book = ledger.get_book(email)
     shortfall = round(max(0.0, usd - book["cash_usd"]), 2)
     if book["cash_usd"] + book["reserve_usd"] + 1e-9 < usd:
@@ -248,6 +264,7 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
                 prompt,
                 ticker=ticker,
                 shares=shares,
+                price_rub=round(live, 2),
                 need_usd=usd,
                 shortfall_usd=shortfall,
                 cash_usd=book["cash_usd"],
@@ -276,6 +293,7 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
                 prompt,
                 ticker=ticker,
                 shares=shares,
+                price_rub=round(live, 2),
                 need_usd=usd,
                 shortfall_usd=0,
                 cash_usd=book["cash_usd"],
@@ -599,7 +617,24 @@ def execute_sell(ticker: str, shares: int) -> str:
         )
     if not inst or inst.get("price_rub") is None:
         return _dump({"status": "ERROR", "error": "нет котировки Мосбиржи, продажа не записана"})
-    usd = round(shares * float(inst["price_rub"]), 2)
+    if inst.get("doubtful") and not _from_ticket():
+        return _dump({"status": "ERROR", "error": "котировка сомнительна", "message": "Котировка сомнительна, продажа не записана."})
+    live = float(inst["price_rub"])
+    usd = round(shares * live, 2)
+    if _from_ticket():
+        pending = ledger.get_book(email).get("pending_reserve") or {}
+        frozen = pending.get("price_rub")
+        if frozen is None:
+            return _dump({"status": "ERROR", "error": "в заявке нет цены", "message": "Заявка без цены погашена. Напишите продажу ещё раз."})
+        frozen = float(frozen)
+        if frozen <= 0 or abs(live - frozen) / frozen > 0.02:
+            def _drop(b: dict) -> dict:
+                b["pending_reserve"] = None
+                return b
+
+            ledger.update_book(email, _drop)
+            return _dump({"status": "ERROR", "error": "котировка сомнительна", "message": "Цена уехала от заявки. Заявка погашена, напишите продажу ещё раз."})
+        usd = round(shares * frozen, 2)
     if not _from_ticket():
         blocked = store.turn_block(email, "execute_sell")
         if blocked:
@@ -613,7 +648,7 @@ def execute_sell(ticker: str, shares: int) -> str:
             )
             _arm_ticket(
                 email,
-                _new_ticket("large_sell", prompt, ticker=ticker, shares=shares, need_usd=usd),
+                _new_ticket("large_sell", prompt, ticker=ticker, shares=shares, price_rub=round(live, 2), need_usd=usd),
             )
             return _dump({"status": "NEED_BUTTON", "message": prompt, "ticker": ticker, "shares": shares})
 

@@ -39,6 +39,7 @@ def instrument(ticker: str) -> dict | None:
         "price_rub": price,
         "price_source": None if not row else row.get("source"),
         "price_note": None if not row else row.get("price_note"),
+        "doubtful": bool(row and row.get("doubtful")),
     }
 
 

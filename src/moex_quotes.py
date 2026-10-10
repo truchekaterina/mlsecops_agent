@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 import threading
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -17,7 +19,9 @@ from typing import Any
 from paths import DATA
 
 FILE_CACHE = DATA / "moex_cache.json"
-BOARD = "http://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json?iss.meta=off&iss.only=securities,marketdata"
+BOARD = "https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json?iss.meta=off&iss.only=securities,marketdata"
+HOST = "iss.moex.com"
+JUMP = 0.20
 
 CATALOG = {
     "SBER": "Сбербанк",
@@ -30,6 +34,7 @@ CATALOG = {
 
 _LOCK = threading.Lock()
 _CACHE: dict[str, Any] = {"ts": 0.0, "rows": {}}
+_ACCEPTED: dict[str, float] = {}
 _TTL = 120
 
 
@@ -53,13 +58,28 @@ def _row(table: dict, columns: list[str]) -> dict[str, Any]:
     return {name: data[cols.index(name)] for name in columns if name in cols}
 
 
+def _corridor(row: dict) -> dict:
+    price = float(row["price"])
+    old = _ACCEPTED.get(row["ticker"])
+    out = dict(row)
+    if old and abs(price - old) / old > JUMP:
+        out["doubtful"] = True
+        out["price_note"] = "котировка сомнительна"
+        return out
+    _ACCEPTED[row["ticker"]] = price
+    out["doubtful"] = False
+    return out
+
+
 def _fetch_one(ticker: str) -> dict | None:
     url = BOARD.format(ticker=ticker)
+    if urllib.parse.urlparse(url).hostname != HOST or not url.startswith("https://"):
+        return None
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     old = socket.getdefaulttimeout()
     socket.setdefaulttimeout(8)
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=8, context=ssl.create_default_context()) as resp:
             raw = resp.read()
     finally:
         socket.setdefaulttimeout(old)
@@ -108,13 +128,13 @@ def _fetch_all() -> dict[str, dict]:
     with ThreadPoolExecutor(max_workers=len(CATALOG)) as pool:
         for ticker, row in pool.map(lambda t: (t, _try_one(t)), list(CATALOG)):
             if row:
-                found[ticker] = row
+                found[ticker] = _corridor(row)
     for ticker in CATALOG:
         if ticker in found:
             continue
         row = _try_one(ticker)
         if row:
-            found[ticker] = row
+            found[ticker] = _corridor(row)
     return found
 
 
@@ -151,7 +171,14 @@ def load(force: bool = False) -> dict[str, dict]:
             saved = _load_file()
         except (OSError, json.JSONDecodeError):
             saved = {}
-    rows = dict(saved)
+    trusted = {}
+    for ticker, row in saved.items():
+        price = _num(row.get("price"))
+        old = _ACCEPTED.get(ticker)
+        if price is None or old is None or abs(price - old) / old > JUMP:
+            continue
+        trusted[ticker] = row
+    rows = dict(trusted)
     rows.update(live)
     if live:
         try:

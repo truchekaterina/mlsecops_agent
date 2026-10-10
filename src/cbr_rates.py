@@ -7,6 +7,7 @@ import socket
 import ssl
 import threading
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -16,9 +17,7 @@ from paths import DATA
 FILE_CACHE = DATA / "cbr_cache.json"
 
 CBR_URL = "https://www.cbr.ru/scripts/XML_daily.asp"
-CBR_URLS = (
-    "http://www.cbr.ru/scripts/XML_daily.asp",
-)
+CBR_HOST = "www.cbr.ru"
 
 _LOCK = threading.Lock()
 _CACHE: dict[str, Any] = {"ts": 0.0, "date": "", "rows": [], "source": ""}
@@ -104,28 +103,16 @@ def _save_file(date: str, rows: list[dict]) -> None:
 
 
 def _fetch_live() -> tuple[str, list[dict]]:
-    ctx = ssl._create_unverified_context()
+    if urllib.parse.urlparse(CBR_URL).hostname != CBR_HOST or not CBR_URL.startswith("https://"):
+        raise ValueError("курс берётся только с www.cbr.ru по HTTPS")
     old_to = socket.getdefaulttimeout()
     socket.setdefaulttimeout(8)
-    last_err: Exception | None = None
-    raw = b""
     try:
-        for url in CBR_URLS:
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                kw: dict = {"timeout": 8}
-                if url.startswith("https"):
-                    kw["context"] = ctx
-                with urllib.request.urlopen(req, **kw) as resp:
-                    raw = resp.read()
-                last_err = None
-                break
-            except Exception as exc:
-                last_err = exc
+        req = urllib.request.Request(CBR_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8, context=ssl.create_default_context()) as resp:
+            raw = resp.read()
     finally:
         socket.setdefaulttimeout(old_to)
-    if last_err and not raw:
-        raise last_err
     return _parse(raw)
 
 
@@ -162,9 +149,6 @@ def find_code(text: str) -> str | None:
     for row in rows:
         code = row["char_code"]
         if code.lower() in t.split() or f" {code.lower()} " in f" {t} ":
-            return code
-        name = str(row["name"]).lower()
-        if len(name) >= 4 and name in t:
             return code
     return None
 
