@@ -618,12 +618,29 @@ def execute_sell(ticker: str, shares: int) -> str:
             return _dump({"status": "NEED_BUTTON", "message": prompt, "ticker": ticker, "shares": shares})
 
     def _sell(b: dict) -> dict:
+        have_now = int(b["positions"].get(ticker, 0))
+        if have_now < shares:
+            raise ValueError("недостаточно акций в портфеле")
         b["pending_reserve"] = None
-        b["positions"][ticker] = int(b["positions"].get(ticker, 0)) - shares
+        b["positions"][ticker] = have_now - shares
         b["cash_usd"] = round(b["cash_usd"] + usd, 2)
         return b
 
-    after = ledger.update_book(email, _sell)
+    try:
+        after = ledger.update_book(email, _sell)
+    except ValueError:
+        fresh = ledger.get_book(email)
+        return _dump(
+            {
+                "status": "ERROR",
+                "error": "недостаточно акций в портфеле",
+                "ticker": ticker,
+                "have": int(fresh["positions"].get(ticker, 0)),
+                "want": shares,
+                "cash_usd": fresh["cash_usd"],
+                "reserve_usd": fresh["reserve_usd"],
+            }
+        )
     cid = _new_id("SELL")
     _log(
         "SELL",

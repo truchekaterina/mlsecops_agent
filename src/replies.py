@@ -30,7 +30,7 @@ def format_holdings(snap: dict) -> str:
     lines = [
         f"- {p['name']} ({p['ticker']}): {p['shares']} шт., стоимость {p['value_usd']} ₽"
         for p in pos
-        if int(p.get("shares") or 0) > 0
+        if int(p.get("shares") or 0) != 0
     ]
     if not lines:
         return "В портфеле нет купленных акций."

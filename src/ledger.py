@@ -105,6 +105,10 @@ def _read_book(conn, email: str) -> dict:
 
 
 def _write_book(conn, email: str, book: dict) -> None:
+    if float(book.get("cash_usd") or 0) < -1e-9 or float(book.get("reserve_usd") or 0) < -1e-9:
+        raise ValueError("отрицательный остаток")
+    if any(int(shares) < 0 for shares in (book.get("positions") or {}).values()):
+        raise ValueError("отрицательный остаток акций")
     pending = book.get("pending_reserve")
     conn.execute(
         """
@@ -173,7 +177,7 @@ def snapshot(email: str) -> dict:
     positions = []
     pos_usd = 0.0
     for ticker, shares in book["positions"].items():
-        if shares <= 0:
+        if shares == 0:
             continue
         inst = instrument(ticker) or {"name": ticker, "price_rub": None, "price_note": None}
         price = inst.get("price_rub")
