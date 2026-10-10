@@ -239,20 +239,35 @@ def _ensure_turn_gate(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(turn_gate)")}
+    if "phrase" not in cols:
+        conn.execute("ALTER TABLE turn_gate ADD COLUMN phrase TEXT NOT NULL DEFAULT ''")
 
 
-def open_turn(email: str, kind: str) -> None:
+def open_turn(email: str, kind: str, phrase: str = "") -> None:
     left = 1 if kind in {"buy", "sell"} else 0
     with db() as conn:
         conn.execute(
             """
-            INSERT INTO turn_gate(email, kind, trades_left) VALUES(?, ?, ?)
+            INSERT INTO turn_gate(email, kind, trades_left, phrase) VALUES(?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
               kind=excluded.kind,
-              trades_left=excluded.trades_left
+              trades_left=excluded.trades_left,
+              phrase=excluded.phrase
             """,
-            (email.strip().lower(), kind, left),
+            (email.strip().lower(), kind, left, phrase or ""),
         )
+
+
+def turn_phrase(email: str) -> str:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT phrase FROM turn_gate WHERE email=?",
+            (email.strip().lower(),),
+        ).fetchone()
+    if not row:
+        return ""
+    return str(row["phrase"] or "")
 
 
 def turn_block(email: str, tool: str) -> str | None:

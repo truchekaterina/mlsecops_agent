@@ -302,6 +302,12 @@
         const data = await r.json();
         if (!r.ok) {
           addMsg("sys", (data && data.detail) || "Заявка не выполнена");
+          const fresh = await api("/api/account");
+          if (fresh.ok) {
+            const acc = await fresh.json();
+            bal.textContent = fmtAcc(acc);
+            showAsk(acc.pending_reserve);
+          }
           return;
         }
         addMsg("agent", data.text || "");

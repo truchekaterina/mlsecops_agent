@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from paths import STATIC  # noqa: E402
 
-from agent_mode_a import build_agent, history_text, last_text, phrase_allowed, tool_json_payloads, tools_used  # noqa: E402
+from agent_mode_a import build_agent, last_text, rate_codes, tool_json_payloads, tools_used  # noqa: E402
 from auth import LOGIN_FAIL, TTL_HOURS, login, register, session_from_token, signing_secret  # noqa: E402
 from ledger import snapshot  # noqa: E402
 from store import open_turn, revoke_token  # noqa: E402
@@ -39,10 +39,18 @@ from policy import (  # noqa: E402
     is_sell_all,
     is_yes,
     parse_transfer,
+    several_companies,
     story_block,
     utterance_class,
 )
-from replies import OTHER_USER_REPLY, asks_about_other_user, compose_chat_reply, format_buy, format_sell, format_transfer  # noqa: E402
+from replies import (  # noqa: E402
+    OTHER_USER_REPLY,
+    asks_about_other_user,
+    compose_chat_reply,
+    format_buy,
+    format_sell,
+    format_transfer,
+)
 
 signing_secret()
 
@@ -250,7 +258,7 @@ def _open_money_turn(session: dict, message: str) -> str | None:
     kind = utterance_class(message)
     if kind == "mixed":
         return "В одном сообщении можно одну покупку или одну продажу."
-    open_turn(session["email"], kind)
+    open_turn(session["email"], kind, message)
     return None
 
 
@@ -300,14 +308,15 @@ async def _chat_locked(session: dict, body: ChatIn):
             amount = book["reserve_usd"] if transfer["source"] == "reserve" else book["cash_usd"]
         payload = propose_transfer(transfer["source"], transfer["target"], float(amount or 0))
         return _note(session, str(payload.get("message") or payload.get("error") or "Заявка не создана."))
+    several = several_companies(text)
+    if several:
+        return _note(session, several)
     mixed = _open_money_turn(session, text)
     if mixed:
         return _note(session, mixed)
-    if not await asyncio.to_thread(phrase_allowed, text):
-        return _note(session, "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку.")
     agent, _tools, _client = await _agent_for(session)
     result = await agent.ainvoke(
-        {"messages": list(hist)},
+        {"messages": [{"role": "user", "content": text}]},
         config={"recursion_limit": 25},
     )
     used = tools_used(result)
@@ -320,8 +329,8 @@ async def _chat_locked(session: dict, body: ChatIn):
         snap=acc,
         email=session["email"],
         user_message=text,
+        asked_rates=rate_codes(result),
     )
-    hist.append({"role": "assistant", "content": history_text(answer)})
     if len(hist) > 40:
         del hist[:-40]
     return _pack(session, answer, used)
@@ -348,7 +357,6 @@ def _finish_ticket(session: dict, payload: dict) -> dict:
     if payload.get("status") not in ("SUCCESS", "CANCELLED"):
         raise HTTPException(400, text)
     hist = _history.setdefault(session["email"], [])
-    hist.append({"role": "assistant", "content": history_text(text)})
     packed = _pack(session, text, [])
     packed["text"] = text
     return packed

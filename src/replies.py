@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
+import cbr_rates
 from ledger import last_trade
 
 
@@ -37,6 +38,55 @@ def format_holdings(snap: dict) -> str:
     return "\n".join(lines)
 
 
+_PLACEHOLDER = re.compile(
+    r"^(?:ok|ок|ход закрыт|hod закрыт|·)[.!]?$",
+    re.IGNORECASE,
+)
+_FX_NAMES = {"USD": "доллар США", "EUR": "евро", "CNY": "китайский юань"}
+
+
+def is_placeholder(text: str) -> bool:
+    return _PLACEHOLDER.fullmatch((text or "").strip()) is not None
+
+
+def format_rates(payloads: list[dict]) -> str | None:
+    seen: dict[str, dict] = {}
+    for payload in payloads:
+        rows = list(payload.get("currencies") or [])
+        code = str(payload.get("char_code") or payload.get("code") or "").upper()
+        if code and payload.get("value_rub") is not None:
+            rows.append(payload)
+        for row in rows:
+            code = str(row.get("char_code") or row.get("code") or "").upper()
+            if code not in _FX_NAMES or row.get("value_rub") is None:
+                continue
+            seen[code] = row
+    if not seen:
+        return None
+    lines = ["Курс ЦБ РФ:" if len(seen) == 1 else "Курсы ЦБ РФ:"]
+    for code in ("USD", "EUR", "CNY"):
+        row = seen.get(code)
+        if not row:
+            continue
+        nominal = row.get("nominal") or 1
+        lines.append(f"- {_FX_NAMES[code]} ({code}): {row.get('value_rub')} ₽ за {nominal}")
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
+def official_rates(codes: list[str]) -> str | None:
+    """Цифра курса из ответа ЦБ, не из пересказа модели."""
+    wanted = [code for code in ("USD", "EUR", "CNY") if code in set(codes or [])]
+    if not wanted:
+        return None
+    _date, rows = cbr_rates.daily()
+    picked = []
+    for code in wanted:
+        row = next((item for item in rows if item.get("char_code") == code), None)
+        if row:
+            picked.append(row)
+    return format_rates(picked)
+
+
 def format_portfolio(snap: dict) -> str:
     body = format_holdings(snap)
     return (
@@ -54,11 +104,21 @@ def _left(snap: dict, ticker: str) -> int:
     return 0
 
 
+def _share_word(value: object) -> str:
+    amount = int(value or 0)
+    if amount % 10 == 1 and amount % 100 != 11:
+        return "акцию"
+    if amount % 10 in (2, 3, 4) and amount % 100 not in (12, 13, 14):
+        return "акции"
+    return "акций"
+
+
 def format_sell(payload: dict, snap: dict, email: str) -> str:
     ticker = payload.get("ticker")
     left = _left(snap, str(ticker or ""))
+    shares = payload.get("shares")
     return (
-        f"Вы продали {payload.get('shares')} акции {ticker}. "
+        f"Вы продали {shares} {_share_word(shares)} {ticker}. "
         f"Сумма продажи составила {payload.get('usd_amount')} ₽. "
         f"Деньги зачислены на основной счёт.\n"
         f"Ваш текущий портфель выглядит так:\n\n"
@@ -78,8 +138,9 @@ def format_buy(payload: dict, snap: dict, email: str | None = None) -> str:
     mail = ""
     if email:
         mail = f"\nПисьмо «Куплено» отправлено в почтовый сервис на {email}."
+    shares = payload.get("shares")
     return (
-        f"Вы купили {payload.get('shares')} акцию {payload.get('ticker')}. "
+        f"Вы купили {shares} {_share_word(shares)} {payload.get('ticker')}. "
         f"Стоимость покупки составила {payload.get('usd_amount')} ₽.{extra}\n"
         f"Ваш текущий портфель выглядит так:\n\n"
         f"{format_holdings(snap)}\n\n"
@@ -94,6 +155,12 @@ OTHER_USER_REPLY = (
 )
 
 _EMAIL_RE = re.compile(r"[a-z0-9._+-]+@[a-z0-9.-]+", re.IGNORECASE)
+_AT_NAME = re.compile(r"(?:^|[\s,])у\s+([a-zа-яё][a-zа-яё0-9_.-]{1,40})", re.IGNORECASE)
+_NAMED_ACCOUNT = re.compile(
+    r"(?:сч[её]т\w*|портфел\w*|деньг\w*|баланс\w*)\s+(?:у\s+)?"
+    r"([a-zа-яё][a-zа-яё0-9_.-]{1,40})",
+    re.IGNORECASE,
+)
 _PERSON_RE = re.compile(
     r"(?:пользовател\w*|клиент\w*|юзер\w*|user)\s+[\"'«]*([a-zа-яё0-9_.@+-]+)",
     re.IGNORECASE,
@@ -165,6 +232,10 @@ def asks_about_other_user(text: str, email: str, name: str = "") -> bool:
         )
     ):
         return True
+    for rx in (_AT_NAME, _NAMED_ACCOUNT):
+        for match in rx.finditer(folded):
+            if _foreign_token(match.group(1), own):
+                return True
     for rx in (_PERSON_RE, _TOOL_RE):
         for match in rx.finditer(folded):
             token = match.group(1)
@@ -226,7 +297,7 @@ def _pick_trade_payload(payloads: list[dict]) -> dict | None:
     return None
 
 
-def _market_reply(used: list[str], payloads: list[dict], snap: dict) -> str | None:
+def _market_reply(used: list[str], payloads: list[dict], snap: dict, asked_rates: list[str] | None = None) -> str | None:
     """Каталог, счёт и портфель — из тула, в рублях."""
     trade = {"execute_buy", "execute_sell", "sell_all", "confirm_reserve_purchase", "deny_reserve_purchase", "transfer_between"}
     if trade.intersection(used):
@@ -238,7 +309,9 @@ def _market_reply(used: list[str], payloads: list[dict], snap: dict) -> str | No
             for row in (payload or {}).get("instruments") or []:
                 price = row.get("price_rub")
                 if price is None:
-                    lines.append(f"- {row.get('name')} ({row.get('ticker')}): котировки нет")
+                    lines.append(
+                        f"- {row.get('name')} ({row.get('ticker')}): цена с Мосбиржи сейчас недоступна"
+                    )
                 else:
                     note = f", {row.get('price_note')}" if row.get("price_note") else ""
                     lines.append(f"- {row.get('name')} ({row.get('ticker')}): {price} ₽{note}")
@@ -251,6 +324,14 @@ def _market_reply(used: list[str], payloads: list[dict], snap: dict) -> str | No
                 f"Резерв: {snap.get('reserve_usd', 0)} ₽.\n"
                 f"Бумаги:\n{format_holdings(snap)}"
             )
+        if name in {"get_currency_rate", "get_rate"}:
+            rates = official_rates(asked_rates or []) or format_rates(payloads)
+            if rates:
+                return rates
+        if name == "list_currencies":
+            rates = format_rates(payloads)
+            if rates:
+                return rates
     return None
 
 
@@ -262,6 +343,7 @@ def compose_chat_reply(
     snap: dict,
     email: str,
     user_message: str,
+    asked_rates: list[str] | None = None,
 ) -> str:
     """Цифры после тула — из учёта. Решение, какой тул жать, принимает агент."""
     used_set = set(used)
@@ -271,11 +353,18 @@ def compose_chat_reply(
     if payload and payload.get("status") == "ERROR":
         text = payload.get("message") or payload.get("error") or model_text
         if payload.get("have") is not None:
-            text = (
-                f"Нельзя продать {payload.get('want')} {payload.get('ticker')}: "
-                f"в портфеле {payload.get('have')} шт.\n"
-                f"{format_portfolio(snap)}"
-            )
+            have = int(payload.get("have") or 0)
+            if have <= 0:
+                text = (
+                    f"Продать {payload.get('ticker')} нельзя: таких акций в портфеле нет.\n"
+                    f"{format_portfolio(snap)}"
+                )
+            else:
+                text = (
+                    f"Нельзя продать {payload.get('want')} {payload.get('ticker')}: "
+                    f"в портфеле {have} шт.\n"
+                    f"{format_portfolio(snap)}"
+                )
         return text
 
     if payload and payload.get("status") in ("NEED_RESERVE_CONFIRM", "NEED_BUTTON"):
@@ -293,7 +382,8 @@ def compose_chat_reply(
         if payload.get("status") != "SUCCESS":
             return str(payload.get("error") or "Продажа не выполнена.")
         lines = [
-            f"Вы продали {p.get('shares')} акции {p.get('ticker')} на {p.get('usd_amount')} ₽."
+            f"Вы продали {p.get('shares')} {_share_word(p.get('shares'))} "
+            f"{p.get('ticker')} на {p.get('usd_amount')} ₽."
             for p in (payload.get("sales") or [])
         ]
         lines.append(format_portfolio(snap))
@@ -306,7 +396,8 @@ def compose_chat_reply(
     ]
     if len(sells) > 1:
         lines = [
-            f"Вы продали {p.get('shares')} акции {p.get('ticker')} на {p.get('usd_amount')} ₽."
+            f"Вы продали {p.get('shares')} {_share_word(p.get('shares'))} "
+            f"{p.get('ticker')} на {p.get('usd_amount')} ₽."
             for p in sells
         ]
         lines.append(format_portfolio(snap))
@@ -328,7 +419,7 @@ def compose_chat_reply(
         if row:
             return format_buy(_trade_payload(row), snap, email)
 
-    info = _market_reply(used, payloads, snap)
+    info = _market_reply(used, payloads, snap, asked_rates)
     if info:
         return info
 
@@ -337,6 +428,6 @@ def compose_chat_reply(
             "Сделка не записана: в учёте ничего не менялось.\n"
             f"{format_portfolio(snap)}"
         )
-    if not (model_text or "").strip():
-        return "Повторите, что купить, продать или перевести."
+    if is_placeholder(model_text) or not (model_text or "").strip():
+        return "Повторите, что купить, продать или показать: портфель, счёт или курс валют."
     return model_text

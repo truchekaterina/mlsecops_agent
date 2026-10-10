@@ -133,7 +133,7 @@ def list_instruments() -> str:
 
 @mcp.tool()
 def list_currencies() -> str:
-    """Актуальный список валют ЦБ (XML_daily cbr.ru)."""
+    """Весь список валют ЦБ. Для одной валюты не вызывай: доллар, евро или юань — это get_currency_rate или get_rate с одним кодом USD, EUR или CNY."""
     try:
         date, rows = cbr_rates.daily()
         return _dump(
@@ -158,9 +158,9 @@ def list_currencies() -> str:
 
 @mcp.tool()
 def get_account() -> str:
-    """Состояние учебного счёта вошедшего клиента. Тикер не нужен и не спрашивай его.
+    """Состояние своего счёта вошедшего клиента. Тикер не нужен.
 
-    Основной счёт, резерв, оценка позиций. Не отправляй клиента к брокеру.
+    Если в фразе чужое имя или чужая почта — не вызывай. Основной счёт, резерв, бумаги.
     """
     email, name = _client_profile()
     if not email:
@@ -174,10 +174,9 @@ def get_account() -> str:
 
 @mcp.tool()
 def get_portfolio() -> str:
-    """Какие акции уже куплены у вошедшего клиента. Тикер не обязателен.
+    """Портфель вошедшего клиента: какие акции куплены. Вызывай на «портфель» и «состояние портфеля».
 
-    Если клиент просит продать все, shares для execute_sell бери из positions[].shares.
-    Ты сам учебный управляющий, не отправляй к брокеру и не говори, что доступа нет.
+    Чужое имя — не вызывай. Цифры бери только отсюда.
     """
     email, name = _client_profile()
     if not email:
@@ -500,8 +499,15 @@ def propose_sell_all() -> dict:
     held = [ticker for ticker, shares in book["positions"].items() if int(shares) > 0]
     if not held:
         return {"status": "ERROR", "error": "В портфеле нет акций, продавать нечего."}
+    prices: dict[str, float] = {}
+    for ticker in held:
+        inst = ledger.instrument(ticker)
+        price = None if not inst else inst.get("price_rub")
+        if price is None or inst.get("doubtful"):
+            return {"status": "ERROR", "error": "Котировка сомнительна, продажа портфеля не записана."}
+        prices[ticker] = round(float(price), 2)
     prompt = "Продать весь портфель? Нажмите «Да, подтвердить». Срок заявки — 3 минуты."
-    ticket = _new_ticket("sell_all", prompt)
+    ticket = _new_ticket("sell_all", prompt, prices=prices)
     stored = _arm_ticket(email, ticket)
     if stored.get("id") != ticket["id"]:
         return {"status": "NEED_BUTTON", "message": stored.get("prompt"), "pending": stored}
@@ -590,7 +596,7 @@ def execute_sell(ticker: str, shares: int) -> str:
     """Продать названное число акций одного тикера. Цена в рублях с Мосбиржи в момент вызова. Не для «продай все» — для этого sell_all.
 
     Сбер, сбера → SBER. Газпром → GAZP. Лукойл → LKOH. Норникель, норникеля → GMKN. Роснефть → ROSN. Яндекс → YDEX.
-    «продай 4 акции сбера» → ticker=SBER, shares=4. «продай акцию» без числа → shares = 1.
+    «продай 4 акции сбера» → ticker=SBER, shares=4. «продай акцию» без числа → shares=1. «мои акции» одной компании без числа → все штуки этого тикера. «мои акции» одной компании без числа → shares = все штуки этого тикера.
 
     Args:
         ticker: SBER, GAZP, LKOH, GMKN, ROSN или YDEX
@@ -613,6 +619,8 @@ def execute_sell(ticker: str, shares: int) -> str:
         return _no_client()
     book = ledger.get_book(email)
     have = int(book["positions"].get(ticker, 0))
+    if policy.sell_all_of_ticker(store.turn_phrase(email)) == ticker and have > 0:
+        shares = have
     if have < shares:
         return _dump(
             {
@@ -736,9 +744,34 @@ def sell_all() -> str:
     email, _name = _client_profile()
     if not email:
         return _no_client()
+    if not _from_ticket():
+        return _dump(
+            {
+                "status": "ERROR",
+                "side": "SELL_ALL",
+                "error": "Продажа всего портфеля подтверждается кнопкой.",
+            }
+        )
     book = ledger.get_book(email)
+    pending = book.get("pending_reserve") or {}
+    prices = {str(k): float(v) for k, v in (pending.get("prices") or {}).items()}
     held = [(ticker, int(shares)) for ticker, shares in book["positions"].items() if int(shares) > 0]
+
+    def _drop(b: dict) -> dict:
+        b["pending_reserve"] = None
+        return b
+
+    if pending.get("kind") != "sell_all" or not prices:
+        ledger.update_book(email, _drop)
+        return _dump(
+            {
+                "status": "ERROR",
+                "side": "SELL_ALL",
+                "error": "Заявка без цен погашена. Напишите «продай все мои акции» ещё раз.",
+            }
+        )
     if not held:
+        ledger.update_book(email, _drop)
         return _dump(
             {
                 "status": "ERROR",
@@ -748,28 +781,76 @@ def sell_all() -> str:
                 "reserve_usd": book["reserve_usd"],
             }
         )
-    sales = []
+    plan: list[tuple[str, int, float]] = []
     for ticker, shares in held:
-        row = json.loads(execute_sell(ticker, shares))
-        if row.get("status") == "SUCCESS":
-            sales.append(
+        inst = ledger.instrument(ticker)
+        live = None if not inst else inst.get("price_rub")
+        frozen = prices.get(ticker)
+        if frozen is None or live is None or frozen <= 0 or abs(float(live) - frozen) / frozen > 0.02:
+            ledger.update_book(email, _drop)
+            return _dump(
                 {
-                    "ticker": row.get("ticker"),
-                    "shares": row.get("shares"),
-                    "usd_amount": row.get("usd_amount"),
-                    "confirmation_id": row.get("confirmation_id"),
+                    "status": "ERROR",
+                    "side": "SELL_ALL",
+                    "error": "Цена уехала от заявки. Заявка погашена, напишите продажу ещё раз.",
                 }
             )
+        plan.append((ticker, shares, round(shares * frozen, 2)))
+
+    def _sell_book(b: dict) -> dict:
+        for ticker, shares, usd in plan:
+            have_now = int(b["positions"].get(ticker, 0))
+            if have_now < shares:
+                raise ValueError("недостаточно акций в портфеле")
+            b["positions"][ticker] = have_now - shares
+            b["cash_usd"] = round(float(b["cash_usd"]) + usd, 2)
+        b["pending_reserve"] = None
+        return b
+
+    try:
+        after = ledger.update_book(email, _sell_book)
+    except ValueError:
+        fresh = ledger.get_book(email)
+        return _dump(
+            {
+                "status": "ERROR",
+                "side": "SELL_ALL",
+                "error": "Продажа не выполнена, счёт не менялся.",
+                "cash_usd": fresh["cash_usd"],
+                "reserve_usd": fresh["reserve_usd"],
+            }
+        )
+    sales = []
+    for ticker, shares, usd in plan:
+        cid = _new_id("SELL")
+        ledger.record_trade(
+            email=email,
+            kind="SELL",
+            confirmation_id=cid,
+            ticker=ticker,
+            shares=shares,
+            usd_amount=usd,
+            cash_usd=after["cash_usd"],
+            reserve_usd=after["reserve_usd"],
+        )
+        _send_mail_silent("SELL", ticker, shares, usd, cid)
+        sales.append(
+            {
+                "ticker": ticker,
+                "shares": shares,
+                "usd_amount": usd,
+                "confirmation_id": cid,
+            }
+        )
     snap = ledger.snapshot(email)
     return _dump(
         {
-            "status": "SUCCESS" if sales else "ERROR",
+            "status": "SUCCESS",
             "side": "SELL_ALL",
             "sales": sales,
             "cash_usd": snap["cash_usd"],
             "reserve_usd": snap["reserve_usd"],
             "positions": snap["positions"],
-            "error": None if sales else "Продажа не выполнена.",
         }
     )
 

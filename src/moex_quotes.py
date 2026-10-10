@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import socket
 import ssl
 import threading
 import time
@@ -76,13 +75,8 @@ def _fetch_one(ticker: str) -> dict | None:
     if urllib.parse.urlparse(url).hostname != HOST or not url.startswith("https://"):
         return None
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    old = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(8)
-    try:
-        with urllib.request.urlopen(req, timeout=8, context=ssl.create_default_context()) as resp:
-            raw = resp.read()
-    finally:
-        socket.setdefaulttimeout(old)
+    with urllib.request.urlopen(req, timeout=20, context=ssl.create_default_context()) as resp:
+        raw = resp.read()
     payload = json.loads(raw.decode("utf-8"))
     sec = _row(payload.get("securities") or {}, ["SECID", "SHORTNAME", "PREVPRICE"])
     market = _row(payload.get("marketdata") or {}, ["SECID", "LAST"])

@@ -51,6 +51,59 @@ def is_sell_all(text: str) -> bool:
     return _SELL_ALL.search(text or "") is not None
 
 
+_COMPANY_HINTS = (
+    ("норникел", "GMKN"),
+    ("газпром", "GAZP"),
+    ("лукойл", "LKOH"),
+    ("роснефт", "ROSN"),
+    ("яндекс", "YDEX"),
+    ("сбер", "SBER"),
+    ("gmkn", "GMKN"),
+    ("gazp", "GAZP"),
+    ("lkoh", "LKOH"),
+    ("rosn", "ROSN"),
+    ("ydex", "YDEX"),
+    ("sber", "SBER"),
+)
+
+
+def companies_in(text: str) -> set[str]:
+    low = (text or "").lower().replace("ё", "е")
+    found: set[str] = set()
+    for hint, code in _COMPANY_HINTS:
+        if hint in low:
+            found.add(code)
+    return found
+
+
+def several_companies(text: str) -> str | None:
+    """Отказ, если в одной фразе две компании. Сделку не исполняет."""
+    if utterance_class(text) not in {"buy", "sell"}:
+        return None
+    if len(companies_in(text)) < 2:
+        return None
+    return (
+        "Одним сообщением можно купить или продать акции только одной компании. "
+        "Сначала напишите одну заявку, например: купи 3 акции сбера. "
+        "Следующим сообщением — другую, например: купи 2 акции норникеля."
+    )
+
+
+def sell_all_of_ticker(text: str) -> str | None:
+    """«Мои акции» одной компании без числа — весь этот пакет, не одна штука."""
+    if utterance_class(text) != "sell" or is_sell_all(text):
+        return None
+    if _NUMBER.search(text or ""):
+        return None
+    low = (text or "").lower().replace("ё", "е")
+    if re.search(r"мо[ий]\s+акци", low) is None:
+        return None
+    found = companies_in(text)
+    if len(found) != 1:
+        return None
+    return next(iter(found))
+
+
 def utterance_class(text: str) -> str:
     """buy, sell, mixed или info. Продажа всего сюда не входит."""
     raw = text or ""

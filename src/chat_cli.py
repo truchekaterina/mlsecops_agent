@@ -11,7 +11,7 @@ os.environ.setdefault("OLLAMA_NUM_GPU", "0")
 
 import mail_client  # noqa: E402
 from auth import login, register, require_session  # noqa: E402
-from agent_mode_a import build_agent, history_text, last_text, tool_json_payloads, tools_used  # noqa: E402
+from agent_mode_a import build_agent, last_text, rate_codes, tool_json_payloads, tools_used  # noqa: E402
 from ledger import snapshot  # noqa: E402
 from mcp_strazh import set_client  # noqa: E402
 from replies import OTHER_USER_REPLY, asks_about_other_user, compose_chat_reply  # noqa: E402
@@ -125,7 +125,7 @@ async def main() -> None:
         print("... думаю (на CPU может быть 20–60 сек)")
         hist.append({"role": "user", "content": text})
         result = await agent.ainvoke(
-            {"messages": list(hist)},
+            {"messages": [{"role": "user", "content": text}]},
             config={"recursion_limit": 25},
         )
         snap = snapshot(session["email"])
@@ -138,8 +138,8 @@ async def main() -> None:
             snap=snap,
             email=session["email"],
             user_message=text,
+            asked_rates=rate_codes(result),
         )
-        hist.append({"role": "assistant", "content": history_text(reply)})
         if len(hist) > 40:
             del hist[:-40]
         print("Агент:", reply)
