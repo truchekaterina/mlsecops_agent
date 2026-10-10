@@ -78,12 +78,17 @@ def _from_ticket() -> bool:
     return bool(getattr(_TLS, "ticket_ok", False))
 
 
-def _arm_ticket(email: str, ticket: dict) -> None:
+def _arm_ticket(email: str, ticket: dict) -> dict:
+    current = ledger.get_book(email).get("pending_reserve")
+    if isinstance(current, dict) and current.get("id") and policy.ticket_alive(str(current.get("expires_at") or "")):
+        return current
+
     def _set(book: dict) -> dict:
         book["pending_reserve"] = ticket
         return book
 
     ledger.update_book(email, _set)
+    return ticket
 
 
 def _new_ticket(kind: str, prompt: str, **fields) -> dict:
@@ -257,20 +262,20 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
             f"Покупка {shares} {ticker} стоит {usd} ₽ (не хватает {shortfall} ₽). "
             "Нажмите «Да, подтвердить», чтобы снять нехватку с резерва."
         )
-        _arm_ticket(
-            email,
-            _new_ticket(
-                "reserve_buy",
-                prompt,
-                ticker=ticker,
-                shares=shares,
-                price_rub=round(live, 2),
-                need_usd=usd,
-                shortfall_usd=shortfall,
-                cash_usd=book["cash_usd"],
-                reserve_usd=book["reserve_usd"],
-            ),
+        fresh = _new_ticket(
+            "reserve_buy",
+            prompt,
+            ticker=ticker,
+            shares=shares,
+            price_rub=round(live, 2),
+            need_usd=usd,
+            shortfall_usd=shortfall,
+            cash_usd=book["cash_usd"],
+            reserve_usd=book["reserve_usd"],
         )
+        stored = _arm_ticket(email, fresh)
+        if stored.get("id") != fresh["id"]:
+            return _dump({"status": "NEED_BUTTON", "message": stored.get("prompt")})
         return _dump(
             {
                 "status": "NEED_RESERVE_CONFIRM",
@@ -286,20 +291,20 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
             f"Покупка {shares} {ticker} стоит {usd} ₽, это выше порога "
             f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
         )
-        _arm_ticket(
-            email,
-            _new_ticket(
-                "large_buy",
-                prompt,
-                ticker=ticker,
-                shares=shares,
-                price_rub=round(live, 2),
-                need_usd=usd,
-                shortfall_usd=0,
-                cash_usd=book["cash_usd"],
-                reserve_usd=book["reserve_usd"],
-            ),
+        fresh = _new_ticket(
+            "large_buy",
+            prompt,
+            ticker=ticker,
+            shares=shares,
+            price_rub=round(live, 2),
+            need_usd=usd,
+            shortfall_usd=0,
+            cash_usd=book["cash_usd"],
+            reserve_usd=book["reserve_usd"],
         )
+        stored = _arm_ticket(email, fresh)
+        if stored.get("id") != fresh["id"]:
+            return _dump({"status": "NEED_BUTTON", "message": stored.get("prompt")})
         return _dump({"status": "NEED_BUTTON", "message": prompt})
 
     reserved = 0.0
@@ -497,7 +502,9 @@ def propose_sell_all() -> dict:
         return {"status": "ERROR", "error": "В портфеле нет акций, продавать нечего."}
     prompt = "Продать весь портфель? Нажмите «Да, подтвердить». Срок заявки — 3 минуты."
     ticket = _new_ticket("sell_all", prompt)
-    _arm_ticket(email, ticket)
+    stored = _arm_ticket(email, ticket)
+    if stored.get("id") != ticket["id"]:
+        return {"status": "NEED_BUTTON", "message": stored.get("prompt"), "pending": stored}
     return {"status": "NEED_BUTTON", "message": prompt, "pending": ticket}
 
 
@@ -522,7 +529,9 @@ def propose_transfer(source: str, target: str, amount: float) -> dict:
         "Нажмите «Да, подтвердить». Срок заявки — 3 минуты."
     )
     ticket = _new_ticket("transfer", prompt, source=source, target=target, amount=amount)
-    _arm_ticket(email, ticket)
+    stored = _arm_ticket(email, ticket)
+    if stored.get("id") != ticket["id"]:
+        return {"status": "NEED_BUTTON", "message": stored.get("prompt"), "pending": stored}
     return {"status": "NEED_BUTTON", "message": prompt, "pending": ticket}
 
 
@@ -646,10 +655,10 @@ def execute_sell(ticker: str, shares: int) -> str:
                 f"Продажа {shares} {ticker} на {usd} ₽ выше порога "
                 f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
             )
-            _arm_ticket(
-                email,
-                _new_ticket("large_sell", prompt, ticker=ticker, shares=shares, price_rub=round(live, 2), need_usd=usd),
-            )
+            fresh = _new_ticket("large_sell", prompt, ticker=ticker, shares=shares, price_rub=round(live, 2), need_usd=usd)
+            stored = _arm_ticket(email, fresh)
+            if stored.get("id") != fresh["id"]:
+                return _dump({"status": "NEED_BUTTON", "message": stored.get("prompt")})
             return _dump({"status": "NEED_BUTTON", "message": prompt, "ticker": ticker, "shares": shares})
 
     def _sell(b: dict) -> dict:
