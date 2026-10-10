@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 os.environ.setdefault("OLLAMA_NUM_GPU", "0")
@@ -18,21 +19,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from paths import STATIC  # noqa: E402
 
 from agent_mode_a import build_agent, history_text, last_text, tool_json_payloads, tools_used  # noqa: E402
-from auth import login, register, session_from_token  # noqa: E402
+from auth import LOGIN_FAIL, TTL_HOURS, login, register, session_from_token, signing_secret  # noqa: E402
 from ledger import snapshot  # noqa: E402
-from store import DB_PATH  # noqa: E402
+from store import DB_PATH, open_turn, revoke_token  # noqa: E402
 from mcp_strazh import (  # noqa: E402
-    confirm_reserve_purchase,
-    deny_reserve_purchase,
+    confirm_ticket,
+    deny_ticket,
+    propose_sell_all,
+    propose_transfer,
     set_client,
-    transfer_between,
 )
-from replies import OTHER_USER_REPLY, asks_about_other_user, compose_chat_reply, format_buy, format_transfer  # noqa: E402
+from policy import (  # noqa: E402
+    is_no,
+    is_sell_all,
+    is_yes,
+    parse_transfer,
+    story_block,
+    utterance_class,
+)
+from replies import OTHER_USER_REPLY, asks_about_other_user, compose_chat_reply, format_buy, format_sell, format_transfer  # noqa: E402
+
+signing_secret()
 
 app = FastAPI(title="Страж", version="mode-a")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -42,6 +54,9 @@ _history: dict[str, list] = {}
 _lock = asyncio.Lock()
 _user_locks: dict[str, asyncio.Lock] = {}
 _user_locks_guard = asyncio.Lock()
+_login_fails: dict[str, list[float]] = {}
+_LOGIN_LIMIT = 8
+_LOGIN_WINDOW = 60.0
 
 
 class RegisterIn(BaseModel):
@@ -59,11 +74,8 @@ class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
-class TransferIn(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-    amount: float = Field(gt=0, le=1_000_000_000)
-    source: str = Field(alias="from", min_length=2, max_length=40)
-    target: str = Field(alias="to", min_length=2, max_length=40)
+class TicketIn(BaseModel):
+    id: str = Field(min_length=4, max_length=40)
 
 
 async def _hold_user(email: str) -> asyncio.Lock:
@@ -97,18 +109,50 @@ def _pack(session: dict, text: str, tools: list[str]) -> dict:
     }
 
 
+def _client_ip(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _login_locked(ip: str) -> bool:
+    now = time.monotonic()
+    hits = [stamp for stamp in _login_fails.get(ip, []) if now - stamp < _LOGIN_WINDOW]
+    _login_fails[ip] = hits
+    return len(hits) >= _LOGIN_LIMIT
+
+
+def _login_failed(ip: str) -> None:
+    now = time.monotonic()
+    hits = [stamp for stamp in _login_fails.get(ip, []) if now - stamp < _LOGIN_WINDOW]
+    hits.append(now)
+    _login_fails[ip] = hits[-_LOGIN_LIMIT:]
+
+
+def _login_ok(ip: str) -> None:
+    _login_fails.pop(ip, None)
+
+
+def _set_session_cookie(resp: JSONResponse, token: str) -> JSONResponse:
+    resp.set_cookie(
+        "strazh_token",
+        token,
+        httponly=True,
+        samesite="lax",
+        max_age=TTL_HOURS * 3600,
+        path="/",
+    )
+    return resp
+
+
 def _bearer(request: Request) -> dict:
-    header = request.headers.get("authorization") or ""
-    if header.lower().startswith("bearer "):
-        token = header[7:].strip()
-    else:
-        token = (request.cookies.get("strazh_token") or "").strip()
+    token = (request.cookies.get("strazh_token") or "").strip()
     if not token:
         raise HTTPException(401, "Сначала войдите")
     try:
         return session_from_token(token)
-    except ValueError as e:
-        raise HTTPException(401, str(e)) from e
+    except (ValueError, RuntimeError):
+        raise HTTPException(401, "Сначала войдите") from None
 
 
 @app.get("/")
@@ -144,39 +188,45 @@ async def api_register(body: RegisterIn):
         {
             "name": session["name"],
             "email": session["email"],
-            "token": session["token"],
             "account": snapshot(session["email"]),
         }
     )
-    resp.set_cookie("strazh_token", session["token"], httponly=True, samesite="lax", max_age=8 * 3600)
-    return resp
+    return _set_session_cookie(resp, session["token"])
 
 
 @app.post("/api/login")
-async def api_login(body: LoginIn):
+async def api_login(body: LoginIn, request: Request):
+    ip = _client_ip(request)
+    if _login_locked(ip):
+        raise HTTPException(429, "Слишком много попыток. Подождите минуту.")
     try:
         session = login(body.login, body.password)
         _fresh_chat(session["email"])
-    except KeyError:
-        raise HTTPException(401, "Нет учётки. Зарегистрируйтесь.") from None
-    except PermissionError:
-        raise HTTPException(401, "Неверный пароль") from None
+    except (KeyError, PermissionError):
+        _login_failed(ip)
+        raise HTTPException(401, LOGIN_FAIL) from None
+    _login_ok(ip)
     resp = JSONResponse(
         {
             "name": session["name"],
             "email": session["email"],
-            "token": session["token"],
             "account": snapshot(session["email"]),
         }
     )
-    resp.set_cookie("strazh_token", session["token"], httponly=True, samesite="lax", max_age=8 * 3600)
-    return resp
+    return _set_session_cookie(resp, session["token"])
 
 
 @app.post("/api/logout")
-async def api_logout():
+async def api_logout(request: Request):
+    token = (request.cookies.get("strazh_token") or "").strip()
+    if token:
+        try:
+            session = session_from_token(token)
+            revoke_token(session["jti"], session["exp"])
+        except (ValueError, RuntimeError):
+            pass
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie("strazh_token")
+    resp.delete_cookie("strazh_token", path="/")
     return resp
 
 
@@ -190,17 +240,23 @@ async def _agent_for(session: dict):
         return _agents[key]
 
 
+def _note(session: dict, text: str) -> dict:
+    hist = _history.setdefault(session["email"], [])
+    hist.append({"role": "assistant", "content": text})
+    return _pack(session, text, [])
+
+
+def _open_money_turn(session: dict, message: str) -> str | None:
+    kind = utterance_class(message)
+    if kind == "mixed":
+        return "В одном сообщении можно одну покупку или одну продажу."
+    open_turn(session["email"], kind)
+    return None
+
+
 @app.post("/api/transfer")
-async def api_transfer(body: TransferIn, request: Request):
-    session = _bearer(request)
-    async with await _hold_user(session["email"]):
-        _bind_client(session)
-        payload = transfer_between(body.source, body.target, body.amount)
-        if payload.get("status") != "SUCCESS":
-            raise HTTPException(400, payload.get("error") or "Перевод не выполнен")
-        payload["text"] = format_transfer(payload)
-        payload["account"] = snapshot(session["email"])
-        return payload
+async def api_transfer(body: TicketIn, request: Request):
+    raise HTTPException(400, "Перевод выполняется кнопкой заявки, не этим запросом.")
 
 
 @app.post("/api/chat")
@@ -213,12 +269,41 @@ async def api_chat(body: ChatIn, request: Request):
 async def _chat_locked(session: dict, body: ChatIn):
     _bind_client(session)
     hist = _history.setdefault(session["email"], [])
-    if asks_about_other_user(body.message, session["email"], session["name"]):
-        hist.append({"role": "user", "content": body.message})
-        hist.append({"role": "assistant", "content": OTHER_USER_REPLY})
-        return _pack(session, OTHER_USER_REPLY, [])
+    text = body.message.strip()
+    hist.append({"role": "user", "content": text})
+    blocked = story_block(text)
+    if blocked:
+        return _note(session, blocked)
+    if asks_about_other_user(text, session["email"], session["name"]):
+        return _note(session, OTHER_USER_REPLY)
+    pending = snapshot(session["email"]).get("pending_reserve")
+    if is_yes(text):
+        reply = "Подтверждение — только кнопка «Да, подтвердить» под заявкой."
+        if not pending:
+            reply = "Открытой заявки нет."
+        return _note(session, reply)
+    if is_no(text):
+        if pending:
+            deny_ticket(str(pending.get("id") or ""))
+            return _note(session, "Заявка отменена, счёт не менялся.")
+        return _note(session, "Открытой заявки нет.")
+    if is_sell_all(text):
+        payload = propose_sell_all()
+        return _note(session, str(payload.get("message") or payload.get("error") or "Заявка не создана."))
+    transfer = parse_transfer(text)
+    if transfer is not None:
+        if transfer.get("error"):
+            return _note(session, str(transfer["error"]))
+        amount = transfer["amount"]
+        if transfer.get("all"):
+            book = snapshot(session["email"])
+            amount = book["reserve_usd"] if transfer["source"] == "reserve" else book["cash_usd"]
+        payload = propose_transfer(transfer["source"], transfer["target"], float(amount or 0))
+        return _note(session, str(payload.get("message") or payload.get("error") or "Заявка не создана."))
+    mixed = _open_money_turn(session, text)
+    if mixed:
+        return _note(session, mixed)
     agent, _tools, _client = await _agent_for(session)
-    hist.append({"role": "user", "content": body.message})
     result = await agent.ainvoke(
         {"messages": list(hist)},
         config={"recursion_limit": 25},
@@ -226,49 +311,64 @@ async def _chat_locked(session: dict, body: ChatIn):
     used = tools_used(result)
     acc = snapshot(session["email"])
     payloads = tool_json_payloads(result)
-    text = compose_chat_reply(
+    answer = compose_chat_reply(
         model_text=last_text(result),
         used=used,
         payloads=payloads,
         snap=acc,
         email=session["email"],
-        user_message=body.message,
+        user_message=text,
     )
-    hist.append({"role": "assistant", "content": history_text(text)})
+    hist.append({"role": "assistant", "content": history_text(answer)})
     if len(hist) > 40:
         del hist[:-40]
-    return _pack(session, text, used)
+    return _pack(session, answer, used)
+
+
+def _finish_ticket(session: dict, payload: dict) -> dict:
+    if payload.get("status") == "SUCCESS" and payload.get("side") == "BUY":
+        text = format_buy(payload, snapshot(session["email"]), session["email"])
+    elif payload.get("status") == "SUCCESS" and payload.get("side") == "SELL":
+        text = format_sell(payload, snapshot(session["email"]), session["email"])
+    elif payload.get("status") == "SUCCESS" and payload.get("side") == "SELL_ALL":
+        text = compose_chat_reply(
+            model_text="",
+            used=["sell_all"],
+            payloads=[payload],
+            snap=snapshot(session["email"]),
+            email=session["email"],
+            user_message="",
+        )
+    elif payload.get("side") == "TRANSFER":
+        text = format_transfer(payload)
+    else:
+        text = str(payload.get("message") or payload.get("error") or "Заявка не выполнена.")
+    if payload.get("status") not in ("SUCCESS", "CANCELLED"):
+        raise HTTPException(400, text)
+    hist = _history.setdefault(session["email"], [])
+    hist.append({"role": "assistant", "content": history_text(text)})
+    packed = _pack(session, text, [])
+    packed["text"] = text
+    return packed
 
 
 @app.post("/api/reserve/confirm")
-async def api_reserve_confirm(request: Request):
+async def api_reserve_confirm(body: TicketIn, request: Request):
     session = _bearer(request)
     async with await _hold_user(session["email"]):
-        return await _reserve_confirm_locked(session)
-
-
-async def _reserve_confirm_locked(session: dict):
-    _bind_client(session)
-    payload = json.loads(confirm_reserve_purchase())
-    if payload.get("status") == "SUCCESS":
-        text = format_buy(payload, snapshot(session["email"]), session["email"])
-    else:
-        text = payload.get("error") or str(payload)
-        raise HTTPException(400, text)
-    return _pack(session, text, ["confirm_reserve_purchase"])
+        _bind_client(session)
+        return _finish_ticket(session, confirm_ticket(body.id))
 
 
 @app.post("/api/reserve/deny")
-async def api_reserve_deny(request: Request):
+async def api_reserve_deny(body: TicketIn, request: Request):
     session = _bearer(request)
     async with await _hold_user(session["email"]):
-        return await _reserve_deny_locked(session)
-
-
-async def _reserve_deny_locked(session: dict):
-    _bind_client(session)
-    payload = json.loads(deny_reserve_purchase())
-    return _pack(session, payload.get("message") or "Отменено", ["deny_reserve_purchase"])
+        _bind_client(session)
+        payload = deny_ticket(body.id)
+        if payload.get("status") != "CANCELLED":
+            raise HTTPException(400, payload.get("error") or "Заявка не отменена")
+        return _note(session, payload.get("message") or "Заявка отменена, счёт не менялся.")
 
 
 @app.get("/api/health")

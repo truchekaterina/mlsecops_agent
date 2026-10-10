@@ -17,7 +17,7 @@ from paths import DATA  # noqa: E402
 
 import mcp_strazh as tools  # noqa: E402
 from agent_mode_a import build_agent, last_text  # noqa: E402
-from auth import decode_jwt, load_store, login  # noqa: E402
+from auth import decode_jwt, login, signing_secret  # noqa: E402
 from ledger import clear_history, reset_book, snapshot  # noqa: E402
 from mail_store import list_messages  # noqa: E402
 from replies import compose_chat_reply  # noqa: E402
@@ -43,9 +43,10 @@ def _kinds() -> list[str]:
 def check_auth() -> dict:
     print("=== Вход клиента ===")
     session = login("client@demo", "demo", persist=True)
-    store = load_store()
-    claims = decode_jwt(session["token"], store["secret"])
-    assert claims["email"] == "client@demo", claims
+    claims = decode_jwt(session["token"], signing_secret())
+    assert claims["sub"] == "client@demo", claims
+    assert "email" not in claims and "name" not in claims
+    assert session["name"] == "Клиент"
     os.environ["STRAZH_CLIENT_EMAIL"] = session["email"]
     os.environ["STRAZH_CLIENT_NAME"] = session["name"]
     print("  JWT:", session["email"], session["name"], "OK")

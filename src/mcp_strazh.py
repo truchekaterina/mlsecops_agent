@@ -17,12 +17,13 @@ import cbr_rates
 import action_hash
 import ledger
 import mail_client
+import policy
+import store
 from paths import DATA
 
 _TLS = threading.local()
 
 LOG = DATA / "trades.log"
-SESSION = DATA / "session.json"
 
 mcp = FastMCP("strazh-mcp")
 
@@ -34,17 +35,22 @@ def set_client(email: str, name: str = "") -> None:
 
 
 def _client_profile() -> tuple[str, str]:
-    """Почта и имя только из сессии / env, не из промпта модели."""
+    """Почта и имя из привязки запроса или из окружения процесса MCP."""
     email = str(getattr(_TLS, "email", "") or "").strip().lower()
     name = str(getattr(_TLS, "name", "") or "").strip()
     if not email:
         email = (os.environ.get("STRAZH_CLIENT_EMAIL") or "").strip().lower()
         name = (os.environ.get("STRAZH_CLIENT_NAME") or name).strip()
-    if not email and SESSION.exists():
-        data = json.loads(SESSION.read_text(encoding="utf-8"))
-        email = str(data.get("email") or "").strip().lower()
-        name = str(data.get("name") or name).strip()
-    return email or "client@demo", name or "Клиент"
+    if not email:
+        return "", ""
+    return email, name or "Клиент"
+
+
+def _no_client(as_text: bool = True) -> str | dict:
+    payload = {"status": "ERROR", "error": "Нет вошедшего клиента."}
+    if as_text:
+        return _dump(payload)
+    return payload
 
 
 def _log(kind: str, payload: dict) -> None:
@@ -66,6 +72,28 @@ def _log(kind: str, payload: dict) -> None:
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8].upper()}"
+
+
+def _from_ticket() -> bool:
+    return bool(getattr(_TLS, "ticket_ok", False))
+
+
+def _arm_ticket(email: str, ticket: dict) -> None:
+    def _set(book: dict) -> dict:
+        book["pending_reserve"] = ticket
+        return book
+
+    ledger.update_book(email, _set)
+
+
+def _new_ticket(kind: str, prompt: str, **fields) -> dict:
+    return {
+        "id": _new_id("ASK"),
+        "kind": kind,
+        "expires_at": policy.expires_at(),
+        "prompt": prompt,
+        **fields,
+    }
 
 
 def _dump(payload: dict) -> str:
@@ -131,6 +159,8 @@ def get_account() -> str:
     Основной счёт, резерв, оценка позиций. Не отправляй клиента к брокеру.
     """
     email, name = _client_profile()
+    if not email:
+        return _no_client()
     snap = ledger.snapshot(email)
     snap["status"] = "SUCCESS"
     snap["name"] = name
@@ -146,6 +176,8 @@ def get_portfolio() -> str:
     Ты сам учебный управляющий, не отправляй к брокеру и не говори, что доступа нет.
     """
     email, name = _client_profile()
+    if not email:
+        return _no_client()
     snap = ledger.snapshot(email)
     held = [p for p in snap["positions"] if int(p.get("shares") or 0) > 0]
     return _dump(
@@ -204,32 +236,23 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
         ledger.update_book(email, _clear)
         return _dump(_insufficient_funds(book, ticker, shares, usd))
     if not use_reserve and shortfall > 0:
-
-        def _pend(b: dict) -> dict:
-            b["pending_reserve"] = {
-                "ticker": ticker,
-                "shares": shares,
-                "need_usd": usd,
-                "shortfall_usd": shortfall,
-                "cash_usd": b["cash_usd"],
-                "reserve_usd": b["reserve_usd"],
-            }
-            return b
-
-        ledger.update_book(email, _pend)
-        _log(
-            "RESERVE_ASK",
-            {"client": email, "ticker": ticker, "shares": shares, "shortfall_usd": shortfall},
+        prompt = (
+            f"На основном счёте {book['cash_usd']} ₽, резерв {book['reserve_usd']} ₽. "
+            f"Покупка {shares} {ticker} стоит {usd} ₽ (не хватает {shortfall} ₽). "
+            "Нажмите «Да, подтвердить», чтобы снять нехватку с резерва."
         )
-        ledger.record_trade(
-            email=email,
-            kind="RESERVE_ASK",
-            confirmation_id=_new_id("ASK"),
-            ticker=ticker,
-            shares=shares,
-            usd_amount=usd,
-            cash_usd=book["cash_usd"],
-            reserve_usd=book["reserve_usd"],
+        _arm_ticket(
+            email,
+            _new_ticket(
+                "reserve_buy",
+                prompt,
+                ticker=ticker,
+                shares=shares,
+                need_usd=usd,
+                shortfall_usd=shortfall,
+                cash_usd=book["cash_usd"],
+                reserve_usd=book["reserve_usd"],
+            ),
         )
         return _dump(
             {
@@ -238,16 +261,28 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
                 "ticker": ticker,
                 "shares": shares,
                 "need_usd": usd,
-                "cash_usd": book["cash_usd"],
-                "reserve_usd": book["reserve_usd"],
-                "shortfall_usd": shortfall,
-                "message": (
-                    f"На основном счёте {book['cash_usd']} ₽, резерв {book['reserve_usd']} ₽. "
-                    f"Покупка {shares} {ticker} стоит {usd} ₽ (не хватает {shortfall} ₽). "
-                    "Снять нехватку с резервного счёта? Напишите да или нет."
-                ),
+                "message": prompt,
             }
         )
+    if not _from_ticket() and usd > policy.AMOUNT_NEEDS_CONFIRM:
+        prompt = (
+            f"Покупка {shares} {ticker} стоит {usd} ₽, это выше порога "
+            f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
+        )
+        _arm_ticket(
+            email,
+            _new_ticket(
+                "large_buy",
+                prompt,
+                ticker=ticker,
+                shares=shares,
+                need_usd=usd,
+                shortfall_usd=0,
+                cash_usd=book["cash_usd"],
+                reserve_usd=book["reserve_usd"],
+            ),
+        )
+        return _dump({"status": "NEED_BUTTON", "message": prompt})
 
     reserved = 0.0
 
@@ -355,7 +390,8 @@ def execute_buy(ticker: str, shares: int) -> str:
     Сбер, сбера, сберу → SBER. Газпром → GAZP. Лукойл → LKOH. Норникель, норникеля → GMKN. Роснефть → ROSN. Яндекс → YDEX.
     «купи 4 акции сбера» → ticker=SBER, shares=4. Если число не названо («купи акцию»), shares = 1.
     Нулевой резерв и выход из почты не повод отказывать: решит этот тул.
-    Если денег на основном мало — не трогай резерв, верни NEED_RESERVE_CONFIRM и жди «да».
+    Если денег на основном мало — не трогай резерв, верни NEED_RESERVE_CONFIRM. Покупку завершит кнопка, не слово «да».
+    Новая фраза клиента — новый вызов, даже если такая покупка уже была.
     Не пиши, что покупка прошла, пока ответ не SUCCESS.
 
     Args:
@@ -374,13 +410,110 @@ def execute_buy(ticker: str, shares: int) -> str:
             }
         )
     email, _name = _client_profile()
+    if not email:
+        return _no_client()
+    if not _from_ticket():
+        blocked = store.turn_block(email, "execute_buy")
+        if blocked:
+            return _dump({"status": "ERROR", "error": blocked})
+        if not store.claim_trade(email):
+            return _dump({"status": "ERROR", "error": "В этой реплике уже есть проводка."})
     return _finish_buy(email, ticker, shares, use_reserve=False)
+
+
+def _load_ticket(email: str, ticket_id: str) -> dict | None:
+    pending = ledger.get_book(email).get("pending_reserve")
+    if not isinstance(pending, dict) or str(pending.get("id") or "") != ticket_id:
+        return None
+    return pending
+
+
+def confirm_ticket(ticket_id: str) -> dict:
+    """Кнопка заявки. Текст чата сюда не попадает."""
+    email, _name = _client_profile()
+    if not email:
+        return {"status": "ERROR", "error": "Нет вошедшего клиента."}
+    pending = _load_ticket(email, ticket_id)
+    if not pending:
+        return {"status": "ERROR", "error": "Заявка не найдена или срок истёк."}
+    kind = str(pending.get("kind") or "")
+    _TLS.ticket_ok = True
+    try:
+        if kind == "reserve_buy":
+            return json.loads(_finish_buy(email, str(pending["ticker"]), int(pending["shares"]), True))
+        if kind == "large_buy":
+            return json.loads(_finish_buy(email, str(pending["ticker"]), int(pending["shares"]), False))
+        if kind == "large_sell":
+            return json.loads(execute_sell(str(pending["ticker"]), int(pending["shares"])))
+        if kind == "sell_all":
+            return json.loads(sell_all())
+        if kind == "transfer":
+            return transfer_between(str(pending["source"]), str(pending["target"]), float(pending["amount"]))
+    finally:
+        _TLS.ticket_ok = False
+    return {"status": "ERROR", "error": "Неизвестная заявка."}
+
+
+def deny_ticket(ticket_id: str) -> dict:
+    email, _name = _client_profile()
+    if not email:
+        return {"status": "ERROR", "error": "Нет вошедшего клиента."}
+    if not _load_ticket(email, ticket_id):
+        return {"status": "ERROR", "error": "Заявка не найдена или срок истёк."}
+
+    def _clear(book: dict) -> dict:
+        book["pending_reserve"] = None
+        return book
+
+    ledger.update_book(email, _clear)
+    return {"status": "CANCELLED", "message": "Заявка отменена, счёт не менялся."}
+
+
+def propose_sell_all() -> dict:
+    email, _name = _client_profile()
+    if not email:
+        return {"status": "ERROR", "error": "Нет вошедшего клиента."}
+    book = ledger.get_book(email)
+    held = [ticker for ticker, shares in book["positions"].items() if int(shares) > 0]
+    if not held:
+        return {"status": "ERROR", "error": "В портфеле нет акций, продавать нечего."}
+    prompt = "Продать весь портфель? Нажмите «Да, подтвердить». Срок заявки — 3 минуты."
+    ticket = _new_ticket("sell_all", prompt)
+    _arm_ticket(email, ticket)
+    return {"status": "NEED_BUTTON", "message": prompt, "pending": ticket}
+
+
+def propose_transfer(source: str, target: str, amount: float) -> dict:
+    email, _name = _client_profile()
+    if not email:
+        return {"status": "ERROR", "error": "Нет вошедшего клиента."}
+    book = ledger.get_book(email)
+    src = "reserve_usd" if source == "reserve" else "cash_usd"
+    amount = round(float(amount), 2)
+    if float(book[src]) + 1e-9 < amount:
+        return {
+            "status": "ERROR",
+            "error": "На этом счёте не хватает денег для перевода.",
+            "cash_usd": book["cash_usd"],
+            "reserve_usd": book["reserve_usd"],
+        }
+    src_label = "резерва" if source == "reserve" else "основного счёта"
+    dst_label = "основной счёт" if target == "cash" else "резерв"
+    prompt = (
+        f"Перевести {amount} ₽ с {src_label} на {dst_label}? "
+        "Нажмите «Да, подтвердить». Срок заявки — 3 минуты."
+    )
+    ticket = _new_ticket("transfer", prompt, source=source, target=target, amount=amount)
+    _arm_ticket(email, ticket)
+    return {"status": "NEED_BUTTON", "message": prompt, "pending": ticket}
 
 
 @mcp.tool()
 def confirm_reserve_purchase() -> str:
     """После явного «да» клиента: снять нехватку с резерва и купить отложенную заявку."""
     email, _name = _client_profile()
+    if not email:
+        return _no_client()
     book = ledger.get_book(email)
     pending = book.get("pending_reserve")
     if not pending:
@@ -392,6 +525,8 @@ def confirm_reserve_purchase() -> str:
 def deny_reserve_purchase() -> str:
     """Клиент отказался снимать резерв — покупка отменяется."""
     email, _name = _client_profile()
+    if not email:
+        return _no_client()
     book = ledger.get_book(email)
     pending = book.get("pending_reserve")
     if not pending:
@@ -447,6 +582,8 @@ def execute_sell(ticker: str, shares: int) -> str:
             }
         )
     email, _name = _client_profile()
+    if not email:
+        return _no_client()
     book = ledger.get_book(email)
     have = int(book["positions"].get(ticker, 0))
     if have < shares:
@@ -463,8 +600,25 @@ def execute_sell(ticker: str, shares: int) -> str:
     if not inst or inst.get("price_rub") is None:
         return _dump({"status": "ERROR", "error": "нет котировки Мосбиржи, продажа не записана"})
     usd = round(shares * float(inst["price_rub"]), 2)
+    if not _from_ticket():
+        blocked = store.turn_block(email, "execute_sell")
+        if blocked:
+            return _dump({"status": "ERROR", "error": blocked})
+        if not store.claim_trade(email):
+            return _dump({"status": "ERROR", "error": "В этой реплике уже есть проводка."})
+        if usd > policy.AMOUNT_NEEDS_CONFIRM:
+            prompt = (
+                f"Продажа {shares} {ticker} на {usd} ₽ выше порога "
+                f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
+            )
+            _arm_ticket(
+                email,
+                _new_ticket("large_sell", prompt, ticker=ticker, shares=shares, need_usd=usd),
+            )
+            return _dump({"status": "NEED_BUTTON", "message": prompt, "ticker": ticker, "shares": shares})
 
     def _sell(b: dict) -> dict:
+        b["pending_reserve"] = None
         b["positions"][ticker] = int(b["positions"].get(ticker, 0)) - shares
         b["cash_usd"] = round(b["cash_usd"] + usd, 2)
         return b
@@ -519,6 +673,8 @@ def sell_all() -> str:
     Вызывай сразу, без get_portfolio и без execute_sell. Число акций не передаётся.
     """
     email, _name = _client_profile()
+    if not email:
+        return _no_client()
     book = ledger.get_book(email)
     held = [(ticker, int(shares)) for ticker, shares in book["positions"].items() if int(shares) > 0]
     if not held:
@@ -577,10 +733,13 @@ def transfer_between(source: str, target: str, amount: float) -> dict:
         return {"status": "ERROR", "side": "TRANSFER", "error": "нельзя перевести на тот же счёт"}
     if amount <= 0:
         return {"status": "ERROR", "side": "TRANSFER", "error": "сумма перевода должна быть > 0"}
-    email, _name = _client_profile()
+    email, name = _client_profile()
+    if not email:
+        return _no_client(as_text=False)
     label = {"cash_usd": "основном счёте", "reserve_usd": "резервном счёте"}
 
     def _move(b: dict) -> dict:
+        b["pending_reserve"] = None
         if float(b[src]) + 1e-9 < amount:
             raise ValueError(label[src])
         b[src] = round(float(b[src]) - amount, 2)
@@ -626,7 +785,7 @@ def transfer_between(source: str, target: str, amount: float) -> dict:
     )
     mail_ok, mail_error = _mail_transfer(
         email=email,
-        name=_name,
+        name=name,
         amount=amount,
         src_name=src_name,
         dst_name=dst_name,
@@ -729,6 +888,8 @@ def send_trade_email(
         rub_amount: сумма в рублях по курсу ЦБ, если известна
     """
     to, name = _client_profile()
+    if not to:
+        return _no_client()
     side_u = side.upper().strip()
     title = "Куплено" if side_u == "BUY" else "Продано"
     ticker = ticker.upper().strip()

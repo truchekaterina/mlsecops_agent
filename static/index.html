@@ -158,7 +158,6 @@
     const err = document.getElementById("auth-err");
     const ok = document.getElementById("auth-ok");
     const HINT = "Можно: список акций, состояние счёта, какие куплены, курс валют ЦБ, купить/продать.";
-    let token = localStorage.getItem("strazh_token") || "";
     let chatBusy = false;
     function setChatBusy(on) {
       chatBusy = on;
@@ -192,9 +191,14 @@
       refreshAcc();
       showAsk(user.account && user.account.pending_reserve);
     }
+    function api(url, options) {
+      const opts = options ? { ...options } : {};
+      opts.credentials = "same-origin";
+      return fetch(url, opts);
+    }
     async function refreshAcc() {
-      if (!token) return;
-      const r = await fetch("/api/account", { headers: { Authorization: "Bearer " + token } });
+      const r = await api("/api/account");
+      if (r.status === 401) { showAuth(); return; }
       if (!r.ok) return;
       bal.textContent = fmtAcc(await r.json());
     }
@@ -227,7 +231,7 @@
       err.textContent = "";
       ok.textContent = "";
       const fd = new FormData(e.target);
-      const r = await fetch("/api/register", {
+      const r = await api("/api/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -238,8 +242,6 @@
       });
       const data = await r.json();
       if (!r.ok) { err.textContent = fmtErr(data, "Ошибка регистрации"); return; }
-      token = data.token;
-      localStorage.setItem("strazh_token", token);
       showChat(data);
       showAsk(data.account && data.account.pending_reserve);
     };
@@ -248,7 +250,7 @@
       e.preventDefault();
       err.textContent = "";
       const fd = new FormData(e.target);
-      const r = await fetch("/api/login", {
+      const r = await api("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -258,15 +260,12 @@
       });
       const data = await r.json();
       if (!r.ok) { err.textContent = fmtErr(data, "Ошибка входа"); return; }
-      token = data.token;
-      localStorage.setItem("strazh_token", token);
       showChat(data);
       showAsk(data.account && data.account.pending_reserve);
     };
 
     document.getElementById("btn-out").onclick = async () => {
-      await fetch("/api/logout", { method: "POST" });
-      token = "";
+      await api("/api/logout", { method: "POST" });
       localStorage.removeItem("strazh_token");
       showAuth();
     };
@@ -283,10 +282,34 @@
 
     const askBox = document.getElementById("ask-box");
     const askText = document.getElementById("ask-text");
+    let askId = "";
     function showAsk(p) {
-      if (!p) { askBox.classList.add("hidden"); return; }
-      askText.textContent = "Нехватка " + p.shortfall_usd + " ₽ для " + p.shares + " " + p.ticker + ". Снять с резерва?";
+      if (!p || !p.id) { askBox.classList.add("hidden"); askId = ""; return; }
+      askId = p.id;
+      askText.textContent = p.prompt || "Подтвердите заявку кнопкой.";
+      document.getElementById("btn-yes").textContent = "Да, подтвердить";
       askBox.classList.remove("hidden");
+    }
+    async function sendTicket(path) {
+      if (!askId || chatBusy) return;
+      setChatBusy(true);
+      try {
+        const r = await api(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: askId }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          addMsg("sys", (data && data.detail) || "Заявка не выполнена");
+          return;
+        }
+        addMsg("agent", data.text || "");
+        if (data.account) bal.textContent = fmtAcc(data.account);
+        showAsk(data.needs_reserve_confirm);
+      } finally {
+        setChatBusy(false);
+      }
     }
     async function sendChat(text) {
       if (chatBusy) return;
@@ -295,12 +318,9 @@
       addMsg("sys", "Запрос выполняется, чат заблокирован...");
       const pending = log.lastChild;
       try {
-        const r = await fetch("/api/chat", {
+        const r = await api("/api/chat", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: "Bearer " + token,
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: text }),
         });
         pending.remove();
@@ -317,17 +337,13 @@
         setChatBusy(false);
       }
     }
-    document.getElementById("btn-yes").onclick = () => sendChat("да");
-    document.getElementById("btn-no").onclick = () => sendChat("нет");
+    document.getElementById("btn-yes").onclick = () => sendTicket("/api/reserve/confirm");
+    document.getElementById("btn-no").onclick = () => sendTicket("/api/reserve/deny");
 
+    localStorage.removeItem("strazh_token");
     (async () => {
-      if (!token) return;
-      const r = await fetch("/api/me", { headers: { Authorization: "Bearer " + token } });
-      if (!r.ok) {
-        localStorage.removeItem("strazh_token");
-        token = "";
-        return;
-      }
+      const r = await api("/api/me");
+      if (!r.ok) return;
       showChat(await r.json());
     })();
   </script>

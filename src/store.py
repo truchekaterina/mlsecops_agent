@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -133,6 +135,8 @@ def init() -> None:
             conn.executescript(SCHEMA)
             conn.commit()
             _ensure_action_hash(conn)
+            _ensure_revoked(conn)
+            _ensure_turn_gate(conn)
             _migrate_json(conn)
             _seed_if_empty(conn)
             _backfill_mailboxes(conn)
@@ -225,9 +229,101 @@ def _migrate_json(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_turn_gate(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS turn_gate (
+          email TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          trades_left INTEGER NOT NULL
+        )
+        """
+    )
+
+
+def open_turn(email: str, kind: str) -> None:
+    left = 1 if kind in {"buy", "sell"} else 0
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO turn_gate(email, kind, trades_left) VALUES(?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+              kind=excluded.kind,
+              trades_left=excluded.trades_left
+            """,
+            (email.strip().lower(), kind, left),
+        )
+
+
+def turn_block(email: str, tool: str) -> str | None:
+    need = "buy" if tool == "execute_buy" else "sell"
+    with db() as conn:
+        row = conn.execute(
+            "SELECT kind, trades_left FROM turn_gate WHERE email=?",
+            (email.strip().lower(),),
+        ).fetchone()
+    if not row or row["kind"] != need:
+        return "Реплика не про эту операцию. Книга не менялась."
+    if int(row["trades_left"]) <= 0:
+        return "В этой реплике уже есть проводка."
+    return None
+
+
+def claim_trade(email: str) -> bool:
+    with db() as conn:
+        cur = conn.execute(
+            """
+            UPDATE turn_gate
+            SET trades_left = trades_left - 1
+            WHERE email=? AND trades_left > 0
+            """,
+            (email.strip().lower(),),
+        )
+        return cur.rowcount == 1
+
+
+def demo_users_enabled() -> bool:
+    return os.environ.get("STRAZH_DEMO_USERS", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _ensure_revoked(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS revoked_tokens (
+          jti TEXT PRIMARY KEY,
+          exp INTEGER NOT NULL
+        )
+        """
+    )
+
+
+def revoke_token(jti: str, exp: int) -> None:
+    if not jti:
+        return
+    with db() as conn:
+        conn.execute("DELETE FROM revoked_tokens WHERE exp < ?", (int(time.time()),))
+        conn.execute(
+            "INSERT OR REPLACE INTO revoked_tokens(jti, exp) VALUES(?, ?)",
+            (jti, int(exp)),
+        )
+
+
+def token_revoked(jti: str) -> bool:
+    if not jti:
+        return True
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM revoked_tokens WHERE jti=?",
+            (jti,),
+        ).fetchone()
+    return row is not None
+
+
 def _seed_if_empty(conn: sqlite3.Connection) -> None:
     n = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
     if n:
+        return
+    if not demo_users_enabled():
         return
     from password_hash import hash_password
 

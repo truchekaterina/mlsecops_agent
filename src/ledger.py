@@ -9,6 +9,7 @@ from typing import Callable
 
 import action_hash
 import moex_quotes
+import policy
 import store
 
 DEFAULT_CASH = 2000.0
@@ -66,17 +67,13 @@ def _normalize(book: dict) -> dict:
     for t in INSTRUMENTS:
         out["positions"][t] = int(pos.get(t, 0) or 0)
     pending = book.get("pending_reserve")
-    if isinstance(pending, dict) and pending.get("ticker") and int(pending.get("shares") or 0) > 0:
-        out["pending_reserve"] = {
-            "ticker": str(pending["ticker"]).upper(),
-            "shares": int(pending["shares"]),
-            "need_usd": round(float(pending.get("need_usd") or 0), 2),
-            "shortfall_usd": round(float(pending.get("shortfall_usd") or 0), 2),
-            "cash_usd": round(float(pending.get("cash_usd") or 0), 2),
-            "reserve_usd": round(float(pending.get("reserve_usd") or 0), 2),
-        }
-    else:
+    if not isinstance(pending, dict) or not pending.get("id") or not pending.get("kind"):
         out["pending_reserve"] = None
+        return out
+    if not policy.ticket_alive(str(pending.get("expires_at") or "")):
+        out["pending_reserve"] = None
+        return out
+    out["pending_reserve"] = dict(pending)
     return out
 
 

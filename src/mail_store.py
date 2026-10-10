@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -93,11 +94,19 @@ def _ensure_action_hash(conn: sqlite3.Connection) -> None:
 
 
 def _seed(conn: sqlite3.Connection) -> None:
+    if os.environ.get("STRAZH_DEMO_USERS", "").strip().lower() not in {"1", "true", "yes"}:
+        return
     created = now_iso()
     for email, password in (("client@demo", "demo"), ("katya@demo", "katya")):
+        exists = conn.execute(
+            "SELECT 1 FROM mailboxes WHERE email=?",
+            (email,),
+        ).fetchone()
+        if exists:
+            continue
         conn.execute(
             """
-            INSERT OR IGNORE INTO mailboxes(email, password_sha256, created_at)
+            INSERT INTO mailboxes(email, password_sha256, created_at)
             VALUES(?, ?, ?)
             """,
             (email, hash_password(password), created),

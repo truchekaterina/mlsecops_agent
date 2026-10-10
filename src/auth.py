@@ -9,16 +9,18 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
+import uuid
 
 import ledger
 import mail_client
 import password_hash
+import policy
 import store
-from paths import DATA
 
-SESSION = DATA / "session.json"
 TTL_HOURS = 8
+LOGIN_FAIL = "Неверная почта или пароль."
 
 
 def _b64url(data: bytes) -> str:
@@ -69,7 +71,7 @@ def find_user(store_snap: dict | None, login: str) -> dict | None:
 
 
 def register(name: str, email: str, password: str) -> dict:
-    name = name.strip()
+    name = policy.clean_name(name)
     email = email.strip().lower()
     if not name or "@" not in email:
         raise ValueError("Нужны имя и почта с @.")
@@ -120,6 +122,16 @@ def check_password(user: dict, password: str) -> bool:
     return True
 
 
+def signing_secret() -> str:
+    """Ключ подписи только из окружения. Учебная константа процесс не принимает."""
+    value = (os.environ.get("STRAZH_JWT_SECRET") or "").strip()
+    if len(value) < 16 or value == store.SECRET_DEFAULT:
+        raise RuntimeError(
+            "Задайте STRAZH_JWT_SECRET длиннее учебной константы. Без этого Страж не подписывает вход."
+        )
+    return value
+
+
 def issue_jwt(user: dict, secret: str) -> str:
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
     now = int(time.time())
@@ -127,8 +139,7 @@ def issue_jwt(user: dict, secret: str) -> str:
         json.dumps(
             {
                 "sub": user["email"],
-                "email": user["email"],
-                "name": user["name"],
+                "jti": uuid.uuid4().hex,
                 "iat": now,
                 "exp": now + TTL_HOURS * 3600,
             },
@@ -153,56 +164,64 @@ def decode_jwt(token: str, secret: str) -> dict:
     data = json.loads(_b64url_decode(payload).decode("utf-8"))
     if int(data.get("exp") or 0) < int(time.time()):
         raise ValueError("JWT истёк")
-    if not data.get("email"):
+    email = str(data.get("sub") or "").strip().lower()
+    if "@" not in email:
         raise ValueError("в токене нет email")
+    if not data.get("jti"):
+        raise ValueError("в токене нет номера")
+    data["sub"] = email
     return data
 
 
 def login(login: str, password: str, persist: bool = False) -> dict:
+    del persist  # токен остаётся в памяти вызывающего, файл сессии не пишем
     user = find_user(None, login)
     if user is None:
-        raise KeyError("нет учётки")
+        raise KeyError(LOGIN_FAIL)
     if not check_password(user, password):
-        raise PermissionError("неверный пароль")
+        raise PermissionError(LOGIN_FAIL)
     ledger.ensure_account(user["email"])
-    token = issue_jwt(user, store.get_secret())
-    session = {
+    token = issue_jwt(user, signing_secret())
+    return {
         "email": user["email"],
         "name": user["name"],
         "token": token,
     }
-    if persist:
-        write_session(session)
-    return session
+
+
+def _user_by_email(email: str) -> dict | None:
+    key = email.strip().lower()
+    if not key:
+        return None
+    store.init()
+    with store.db() as conn:
+        row = conn.execute(
+            "SELECT email, name FROM users WHERE email=?",
+            (key,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"email": row["email"], "name": row["name"]}
 
 
 def session_from_token(token: str) -> dict:
-    claims = decode_jwt(token.strip(), store.get_secret())
+    claims = decode_jwt(token.strip(), signing_secret())
+    jti = str(claims["jti"])
+    if store.token_revoked(jti):
+        raise ValueError("Сначала войдите")
+    user = _user_by_email(str(claims["sub"]))
+    if user is None:
+        raise ValueError("Сначала войдите")
     return {
-        "email": str(claims["email"]),
-        "name": str(claims.get("name") or "Клиент"),
+        "email": user["email"],
+        "name": user["name"],
         "token": token.strip(),
+        "jti": jti,
+        "exp": int(claims["exp"]),
     }
 
 
-def write_session(session: dict) -> None:
-    SESSION.write_text(json.dumps(session, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def read_session() -> dict | None:
-    if not SESSION.exists():
-        return None
-    data = json.loads(SESSION.read_text(encoding="utf-8"))
-    if not data.get("email") or not data.get("token"):
-        return None
-    return data
-
-
 def require_session(session: dict | None = None) -> dict:
-    sess = session or read_session()
-    if not sess:
+    if not session or not session.get("token"):
         raise PermissionError("нет сессии")
-    claims = decode_jwt(str(sess["token"]), store.get_secret())
-    sess["email"] = claims["email"]
-    sess["name"] = str(claims.get("name") or sess.get("name") or "Клиент")
-    return sess
+    return session_from_token(str(session["token"]))

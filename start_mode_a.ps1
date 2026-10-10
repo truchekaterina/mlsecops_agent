@@ -1,4 +1,4 @@
-# Режим A: Ollama на CPU, почтовый сервис, веб-сервис LangChain.
+﻿# Режим A: Ollama на CPU, почтовый сервис, веб-сервис LangChain.
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $root) { $root = (Get-Location).Path }
 $stand = $PSScriptRoot
@@ -14,6 +14,21 @@ try { chcp 65001 | Out-Null } catch {}
 
 $python = Join-Path $root ".venv\Scripts\python.exe"
 $src = Join-Path $stand "src"
+$dataDir = Join-Path $stand "data"
+if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir | Out-Null }
+$secretFile = Join-Path $dataDir "jwt_secret"
+$demoSecret = "strazh-demo-hs256"
+$existing = ""
+if (Test-Path $secretFile) { $existing = (Get-Content -Raw -Path $secretFile).Trim() }
+if ($existing.Length -lt 16 -or $existing -eq $demoSecret) {
+    $bytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $existing = [Convert]::ToBase64String($bytes)
+    Set-Content -Path $secretFile -Value $existing -NoNewline -Encoding ascii
+}
+$env:STRAZH_JWT_SECRET = $existing
+$env:STRAZH_DEMO_USERS = "1"
+
 Start-Process -FilePath $python -ArgumentList @(
     "-m", "uvicorn", "mail_app:app", "--host", "127.0.0.1", "--port", "8090"
 ) -WorkingDirectory $src -WindowStyle Hidden
@@ -24,8 +39,19 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
     Start-Sleep -Seconds 3
 }
 
+$bind = "127.0.0.1"
+if ($env:STRAZH_BIND) { $bind = $env:STRAZH_BIND.Trim() }
+$webArgs = @("-m", "uvicorn", "web_app:app", "--host", $bind, "--port", "8080")
+if (@("127.0.0.1", "localhost", "::1") -notcontains $bind) {
+    if (-not $env:STRAZH_SSL_CERTFILE -or -not $env:STRAZH_SSL_KEYFILE) {
+        Write-Host "Для показа не на этом компьютере задайте STRAZH_SSL_CERTFILE и STRAZH_SSL_KEYFILE."
+        exit 1
+    }
+    $webArgs += @("--ssl-certfile", $env:STRAZH_SSL_CERTFILE, "--ssl-keyfile", $env:STRAZH_SSL_KEYFILE)
+}
+
 Write-Host "Сервис Стража (LangChain create_agent)."
 Write-Host "Откройте в браузере:  http://127.0.0.1:8080"
 Write-Host "Сначала ящик на :8090, потом регистрация в Страже на эту почту."
 Set-Location $src
-& $python -m uvicorn web_app:app --host 0.0.0.0 --port 8080
+& $python @webArgs

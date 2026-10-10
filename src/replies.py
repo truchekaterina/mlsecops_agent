@@ -197,8 +197,6 @@ _CLAIM_RE = re.compile(
     r"вы\s+(купили|продали)|сумма\s+покупки|стоимость\s+покупки|письмо\s+[«\"]куплено|перевед|вызван тул|status\s*=\s*success",
     re.IGNORECASE,
 )
-
-
 def _trade_payload(row: dict) -> dict:
     kind = str(row.get("kind") or "")
     return {
@@ -221,7 +219,7 @@ def _pick_trade_payload(payloads: list[dict]) -> dict | None:
             continue
         if p.get("side") in ("BUY", "SELL", "TRANSFER", "SELL_ALL"):
             return p
-        if p.get("status") in ("ERROR", "NEED_RESERVE_CONFIRM", "CANCELLED"):
+        if p.get("status") in ("ERROR", "NEED_RESERVE_CONFIRM", "NEED_BUTTON", "CANCELLED"):
             return p
         if tool in ("execute_buy", "execute_sell"):
             return p
@@ -280,14 +278,9 @@ def compose_chat_reply(
             )
         return text
 
-    if payload and payload.get("status") == "NEED_RESERVE_CONFIRM" and pending:
-        p = pending
-        return (
-            f"На основном счёте {p['cash_usd']} ₽, резерв {p['reserve_usd']} ₽. "
-            f"Покупка {p['shares']} {p['ticker']} стоит {p['need_usd']} ₽ "
-            f"(не хватает {p['shortfall_usd']} ₽). "
-            "Снять нехватку с резервного счёта? Напишите «да» или «нет»."
-        )
+    if payload and payload.get("status") in ("NEED_RESERVE_CONFIRM", "NEED_BUTTON"):
+        pending = snap.get("pending_reserve") or {}
+        return str(pending.get("prompt") or payload.get("message") or "Нажмите кнопку подтверждения под сообщением.")
 
     if payload and payload.get("status") == "SUCCESS" and payload.get("side") == "TRANSFER":
         return format_transfer(payload)
@@ -329,14 +322,8 @@ def compose_chat_reply(
         if row:
             return format_sell(_trade_payload(row), snap, email)
     if "execute_buy" in used_set:
-        if pending:
-            p = pending
-            return (
-                f"На основном счёте {p['cash_usd']} ₽, резерв {p['reserve_usd']} ₽. "
-                f"Покупка {p['shares']} {p['ticker']} стоит {p['need_usd']} ₽ "
-                f"(не хватает {p['shortfall_usd']} ₽). "
-                "Снять нехватку с резервного счёта? Напишите «да» или «нет»."
-            )
+        if pending and pending.get("prompt"):
+            return str(pending["prompt"])
         row = _fresh_trade(last_trade(email, ("BUY",)))
         if row:
             return format_buy(_trade_payload(row), snap, email)
