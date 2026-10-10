@@ -65,6 +65,7 @@ _user_locks_guard = asyncio.Lock()
 _login_fails: dict[str, list[float]] = {}
 _LOGIN_LIMIT = 8
 _LOGIN_WINDOW = 60.0
+_AGENT_TIMEOUT_SECONDS = 180
 
 
 class RegisterIn(BaseModel):
@@ -315,10 +316,20 @@ async def _chat_locked(session: dict, body: ChatIn):
     if mixed:
         return _note(session, mixed)
     agent, _tools, _client = await _agent_for(session)
-    result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": text}]},
-        config={"recursion_limit": 25},
-    )
+    try:
+        result = await asyncio.wait_for(
+            agent.ainvoke(
+                {"messages": [{"role": "user", "content": text}]},
+                config={"recursion_limit": 12},
+            ),
+            timeout=_AGENT_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        return _note(
+            session,
+            "Агент не успел завершить запрос за 3 минуты. "
+            "Проверьте состояние счёта перед повтором.",
+        )
     used = tools_used(result)
     acc = snapshot(session["email"])
     payloads = tool_json_payloads(result)

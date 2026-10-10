@@ -156,11 +156,6 @@ OTHER_USER_REPLY = (
 
 _EMAIL_RE = re.compile(r"[a-z0-9._+-]+@[a-z0-9.-]+", re.IGNORECASE)
 _AT_NAME = re.compile(r"(?:^|[\s,])у\s+([a-zа-яё][a-zа-яё0-9_.-]{1,40})", re.IGNORECASE)
-_NAMED_ACCOUNT = re.compile(
-    r"(?:сч[её]т\w*|портфел\w*|деньг\w*|баланс\w*)\s+(?:у\s+)?"
-    r"([a-zа-яё][a-zа-яё0-9_.-]{1,40})",
-    re.IGNORECASE,
-)
 _PERSON_RE = re.compile(
     r"(?:пользовател\w*|клиент\w*|юзер\w*|user)\s+[\"'«]*([a-zа-яё0-9_.@+-]+)",
     re.IGNORECASE,
@@ -232,10 +227,9 @@ def asks_about_other_user(text: str, email: str, name: str = "") -> bool:
         )
     ):
         return True
-    for rx in (_AT_NAME, _NAMED_ACCOUNT):
-        for match in rx.finditer(folded):
-            if _foreign_token(match.group(1), own):
-                return True
+    for match in _AT_NAME.finditer(folded):
+        if _foreign_token(match.group(1), own):
+            return True
     for rx in (_PERSON_RE, _TOOL_RE):
         for match in rx.finditer(folded):
             token = match.group(1)

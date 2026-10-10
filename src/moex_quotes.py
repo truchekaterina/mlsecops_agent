@@ -75,7 +75,7 @@ def _fetch_one(ticker: str) -> dict | None:
     if urllib.parse.urlparse(url).hostname != HOST or not url.startswith("https://"):
         return None
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=20, context=ssl.create_default_context()) as resp:
+    with urllib.request.urlopen(req, timeout=10, context=ssl.create_default_context()) as resp:
         raw = resp.read()
     payload = json.loads(raw.decode("utf-8"))
     sec = _row(payload.get("securities") or {}, ["SECID", "SHORTNAME", "PREVPRICE"])
@@ -123,27 +123,7 @@ def _fetch_all() -> dict[str, dict]:
         for ticker, row in pool.map(lambda t: (t, _try_one(t)), list(CATALOG)):
             if row:
                 found[ticker] = _corridor(row)
-    for ticker in CATALOG:
-        if ticker in found:
-            continue
-        row = _try_one(ticker)
-        if row:
-            found[ticker] = _corridor(row)
     return found
-
-
-def _fresh_file() -> dict[str, dict] | None:
-    if not FILE_CACHE.exists():
-        return None
-    if time.time() - FILE_CACHE.stat().st_mtime > _TTL:
-        return None
-    try:
-        rows = _load_file()
-    except (OSError, json.JSONDecodeError):
-        return None
-    if len(rows) < len(CATALOG):
-        return None
-    return rows
 
 
 def load(force: bool = False) -> dict[str, dict]:
@@ -152,12 +132,6 @@ def load(force: bool = False) -> dict[str, dict]:
         ttl = _TTL if len(_CACHE["rows"]) == len(CATALOG) else 15
         if not force and _CACHE["rows"] and now - float(_CACHE["ts"]) < ttl:
             return dict(_CACHE["rows"])
-        if not force:
-            fresh = _fresh_file()
-            if fresh:
-                _CACHE["ts"] = now
-                _CACHE["rows"] = fresh
-                return dict(fresh)
     live = _fetch_all()
     saved: dict[str, dict] = {}
     if len(live) < len(CATALOG):
@@ -189,4 +163,20 @@ def quote(ticker: str) -> dict | None:
     ticker = (ticker or "").upper().strip()
     if ticker not in CATALOG:
         return None
-    return load().get(ticker)
+    rows = load()
+    if ticker in rows:
+        return rows[ticker]
+    row = _try_one(ticker)
+    if not row:
+        return None
+    accepted = _corridor(row)
+    with _LOCK:
+        merged = dict(_CACHE["rows"])
+        merged[ticker] = accepted
+        _CACHE["ts"] = time.time()
+        _CACHE["rows"] = merged
+    try:
+        _save_file(merged)
+    except OSError:
+        pass
+    return accepted

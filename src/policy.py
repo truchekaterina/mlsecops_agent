@@ -58,6 +58,8 @@ _COMPANY_HINTS = (
     ("роснефт", "ROSN"),
     ("яндекс", "YDEX"),
     ("сбер", "SBER"),
+    ("альфа", "UNKNOWN_ALFA"),
+    ("alfa", "UNKNOWN_ALFA"),
     ("gmkn", "GMKN"),
     ("gazp", "GAZP"),
     ("lkoh", "LKOH"),
