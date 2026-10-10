@@ -892,6 +892,8 @@ def _mail_transfer(
     cash_usd: float,
     reserve_usd: float,
 ) -> tuple[bool, str]:
+    if not ledger.has_trade(email, confirmation_id):
+        return False, "письма без записанной сделки нет"
     src = "основного счёта" if src_name == "cash" else "резерва"
     dst = "основной счёт" if dst_name == "cash" else "резерв"
     subject = "Перевод между счетами"
@@ -951,6 +953,8 @@ def send_trade_email(
     to, name = _client_profile()
     if not to:
         return _no_client()
+    if not ledger.has_trade(to, confirmation_id):
+        return _dump({"status": "ERROR", "error": "письма без записанной сделки нет"})
     side_u = side.upper().strip()
     title = "Куплено" if side_u == "BUY" else "Продано"
     ticker = ticker.upper().strip()

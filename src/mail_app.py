@@ -180,6 +180,8 @@ async def api_exists(email: str, request: Request):
 @app.post("/api/internal/deliver")
 async def api_deliver(body: DeliverIn, request: Request):
     _internal(request)
+    if not (body.confirmation_id or "").strip():
+        raise HTTPException(400, "нужен номер сделки")
     try:
         row = mail_store.deliver(
             email=body.email,

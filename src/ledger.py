@@ -278,6 +278,23 @@ def _trade_row(conn, email: str, kinds: tuple[str, ...] | None) -> sqlite3.Row |
     return None
 
 
+def has_trade(email: str, confirmation_id: str) -> bool:
+    owner = _key(email)
+    cid = (confirmation_id or "").strip()
+    if not owner or not cid:
+        return False
+    with store.db() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM trades
+            WHERE confirmation_id=? AND (email=? OR email=?)
+            LIMIT 1
+            """,
+            (cid, _actor(owner), owner),
+        ).fetchone()
+    return row is not None
+
+
 def last_trade(email: str, kinds: tuple[str, ...] | None = None) -> dict | None:
     owner = _key(email)
     with store.db() as conn:
