@@ -58,8 +58,8 @@ def find_user(store_snap: dict | None, login: str) -> dict | None:
     store.init()
     with store.db() as conn:
         row = conn.execute(
-            "SELECT email, name, password_sha256 FROM users WHERE email=? OR lower(name)=?",
-            (key, key),
+            "SELECT email, name, password_sha256 FROM users WHERE email=?",
+            (key,),
         ).fetchone()
     if not row:
         return None

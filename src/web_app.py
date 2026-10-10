@@ -26,7 +26,7 @@ from paths import STATIC  # noqa: E402
 from agent_mode_a import build_agent, history_text, last_text, phrase_allowed, tool_json_payloads, tools_used  # noqa: E402
 from auth import LOGIN_FAIL, TTL_HOURS, login, register, session_from_token, signing_secret  # noqa: E402
 from ledger import snapshot  # noqa: E402
-from store import DB_PATH, open_turn, revoke_token  # noqa: E402
+from store import open_turn, revoke_token  # noqa: E402
 from mcp_strazh import (  # noqa: E402
     confirm_ticket,
     deny_ticket,
@@ -375,10 +375,4 @@ async def api_reserve_deny(body: TicketIn, request: Request):
 
 @app.get("/api/health")
 async def health():
-    return {
-        "ok": True,
-        "stack": "LangChain create_agent + LangGraph + MCP",
-        "model": os.environ.get("STRAZH_MODEL", "qwen2.5:3b"),
-        "users_online_agents": len(_agents),
-        "db": str(DB_PATH),
-    }
+    return {"ok": True}
