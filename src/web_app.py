@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from paths import STATIC  # noqa: E402
 
-from agent_mode_a import build_agent, history_text, last_text, tool_json_payloads, tools_used  # noqa: E402
+from agent_mode_a import build_agent, history_text, last_text, phrase_allowed, tool_json_payloads, tools_used  # noqa: E402
 from auth import LOGIN_FAIL, TTL_HOURS, login, register, session_from_token, signing_secret  # noqa: E402
 from ledger import snapshot  # noqa: E402
 from store import DB_PATH, open_turn, revoke_token  # noqa: E402
@@ -303,6 +303,8 @@ async def _chat_locked(session: dict, body: ChatIn):
     mixed = _open_money_turn(session, text)
     if mixed:
         return _note(session, mixed)
+    if not await asyncio.to_thread(phrase_allowed, text):
+        return _note(session, "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку.")
     agent, _tools, _client = await _agent_for(session)
     result = await agent.ainvoke(
         {"messages": list(hist)},
