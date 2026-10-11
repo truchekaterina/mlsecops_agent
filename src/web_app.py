@@ -28,6 +28,7 @@ from auth import LOGIN_FAIL, TTL_HOURS, login, register, session_from_token, sig
 from ledger import snapshot  # noqa: E402
 from store import open_turn, revoke_token  # noqa: E402
 from mcp_strazh import (  # noqa: E402
+    _log,
     confirm_ticket,
     deny_ticket,
     propose_sell_all,
@@ -116,9 +117,10 @@ def _fresh_chat(email: str) -> None:
 
 def _pack(session: dict, text: str, tools: list[str]) -> dict:
     acc = snapshot(session["email"])
+    if tools:
+        _log("TOOLS", {"tools": list(tools)})
     return {
         "text": text,
-        "tools": tools,
         "client": {"name": session["name"], "email": session["email"]},
         "account": acc,
         "needs_reserve_confirm": acc.get("pending_reserve"),
