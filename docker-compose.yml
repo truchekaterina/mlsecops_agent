@@ -1,0 +1,44 @@
+name: strazh
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 15s
+      retries: 20
+      start_period: 15s
+
+  strazh:
+    image: ${STRAZH_IMAGE:-rinakt/strazh:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+    environment:
+      STRAZH_OLLAMA_URL: http://ollama:11434
+      STRAZH_MODEL: qwen2.5:3b
+      STRAZH_DEMO_USERS: "1"
+      STRAZH_MAIL_URL: http://127.0.0.1:8090
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - strazh-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  ollama:
+  strazh-data:

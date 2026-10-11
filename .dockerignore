@@ -1,0 +1,16 @@
+.git
+.gitignore
+data
+docs
+__pycache__
+*.pyc
+*.pyo
+start_mode_a.ps1
+README.md
+DOCKER.md
+docker-compose.yml
+.venv
+*.md
+заявка
+заявка новая
+отчет по проделанной работе

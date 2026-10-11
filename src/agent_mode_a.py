@@ -23,6 +23,7 @@ UV = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv.exe")
 
 MODEL = os.environ.get("STRAZH_MODEL", "qwen2.5:3b")
 NUM_CTX = int(os.environ.get("STRAZH_NUM_CTX", "4096"))
+OLLAMA_URL = (os.environ.get("STRAZH_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
 
 SYSTEM = """Ты учебный ИИ-управляющий сделками. Ты и есть брокер этого стенда. Живых денег нет.
 
@@ -94,6 +95,7 @@ async def build_agent(session: dict | None = None):
     tools = [t for t in tools if getattr(t, "name", "") in allowed]
     llm = ChatOllama(
         model=MODEL,
+        base_url=OLLAMA_URL,
         temperature=0,
         num_ctx=NUM_CTX,
         keep_alive="30m",
