@@ -4,16 +4,16 @@
 
 Учебный стенд. Слоёв «Стража» нет: паническая продажа и номер счёта проходят.
 
-Агент собран на **LangChain**: `create_agent` (это граф **LangGraph** ReAct). Кнопки — только **MCP**. Чат — в браузере, любой человек регистрируется сам.
+Агент собран на **LangChain**: `create_agent` (это граф **LangGraph** ReAct). Кнопки — только **MCP**. Чат — в браузере, любой человек регистрируется сам
 
 ## Что нужно заранее
 
-- Ollama: https://ollama.com/download
+- Ollama: [https://ollama.com/download](https://ollama.com/download)
 - модель `qwen2.5:3b` (`ollama pull qwen2.5:3b`)
 - Python 3.12 в `.venv`
-- `uv` (для MCP ЦБ): https://docs.astral.sh/uv/
+- `uv` (для MCP ЦБ): [https://docs.astral.sh/uv/](https://docs.astral.sh/uv/)
 
-Почта поднимается вместе со стендом: http://127.0.0.1:8090. Код в `src/`, страницы в `static/`, базы и логи в `data/`.
+Почта поднимается вместе со стендом: [http://127.0.0.1:8090](http://127.0.0.1:8090). Код в `src/`, страницы в `static/`, базы и логи в `data/`.
 
 На этой машине RTX 3050 4 ГБ — GPU **не** используем.
 
@@ -24,12 +24,12 @@ cd "C:\Users\1\Desktop\neurohelp\MLSecOps Сириус"
 .\stand\start_mode_a.ps1
 ```
 
-Откройте http://127.0.0.1:8080
+Откройте [http://127.0.0.1:8080](http://127.0.0.1:8080)
 
 1. Вкладка **Регистрация**: имя, своя почта, пароль.
 2. После входа пишите, что купить / продать / какой курс ЦБ.
 3. Письма о сделках уходят на **почту из регистрации**, не из текста чата.
-4. Свой ящик — http://127.0.0.1:8090. Сначала ящик, потом регистрация в Страже на эту почту.
+4. Свой ящик — [http://127.0.0.1:8090](http://127.0.0.1:8090). Сначала ящик, потом регистрация в Страже на эту почту.
 5. Учётки, счета и сделки — в `stand/data/strazh.db`. Письма — в `stand/data/mail.db`. Новый пользователь сразу получает свой счёт 2000 $ / 5000 $.
 
 Готовые демо-учётки (не обязательны): `client@demo` / `demo`, `katya@demo` / `katya`.
@@ -38,12 +38,14 @@ cd "C:\Users\1\Desktop\neurohelp\MLSecOps Сириус"
 
 ## Что из LangChain уже внутри
 
-| Кусок | Файл |
-|---|---|
-| `langchain.agents.create_agent` | `src/agent_mode_a.py` |
-| `ChatOllama` | `src/agent_mode_a.py` |
-| `langchain-mcp-adapters` | тулы MCP как tools агента |
-| граф для Agent Chat UI | `langgraph.json` → `make_graph` |
+
+| Кусок                           | Файл                            |
+| ------------------------------- | ------------------------------- |
+| `langchain.agents.create_agent` | `src/agent_mode_a.py`           |
+| `ChatOllama`                    | `src/agent_mode_a.py`           |
+| `langchain-mcp-adapters`        | тулы MCP как tools агента       |
+| граф для Agent Chat UI          | `langgraph.json` → `make_graph` |
+
 
 Официальный фронт [Agent Chat UI](https://github.com/langchain-ai/agent-chat-ui) можно потом направить на `langgraph dev` (`http://localhost:2024`, graph id `agent`). Сейчас рабочий сервис — страница на `:8080`, чтобы любой клиент регистрировался и получал письма на свою почту.
 
