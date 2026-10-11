@@ -1,6 +1,7 @@
 """Учебный MCP-сервер Стража: сделки, счёт, портфель, письмо.
 
-Режим A — без слоёв защиты. Живых денег нет. Письма — почтовый сервис :8090.
+Живых денег нет. Письма — почтовый сервис :8090.
+Покупка и продажа без кнопки книгу не меняют.
 """
 
 from __future__ import annotations
@@ -286,10 +287,13 @@ def _finish_buy(email: str, ticker: str, shares: int, use_reserve: bool) -> str:
             }
         )
     if not _from_ticket() and usd > policy.AMOUNT_NEEDS_CONFIRM:
-        prompt = (
-            f"Покупка {shares} {ticker} стоит {usd} ₽, это выше порога "
-            f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
-        )
+        if policy.AMOUNT_NEEDS_CONFIRM <= 0:
+            prompt = f"Нажмите «Да, подтвердить». Покупка {shares} {ticker} стоит {usd} ₽."
+        else:
+            prompt = (
+                f"Покупка {shares} {ticker} стоит {usd} ₽, это выше порога "
+                f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
+            )
         fresh = _new_ticket(
             "large_buy",
             prompt,
@@ -410,7 +414,8 @@ def execute_buy(ticker: str, shares: int) -> str:
     """Купить акции этого клиента с основного счёта. Цена в рублях берётся с Мосбиржи в момент вызова.
 
     Сбер, сбера, сберу → SBER. Газпром → GAZP. Лукойл → LKOH. Норникель, норникеля → GMKN. Роснефть → ROSN. Яндекс → YDEX.
-    «купи 4 акции сбера» → ticker=SBER, shares=4. Если число не названо («купи акцию»), shares = 1.
+    «купи 4 акции сбера» → ticker=SBER, shares=4. Если число не названо, но бумага названа, shares = 1.
+    Тикер и число должны совпасть с фразой клиента. Иначе отказ, книгу не меняй. Любая сумма до кнопки — NEED_BUTTON.
     Нулевой резерв и выход из почты не повод отказывать: решит этот тул.
     Если денег на основном мало — не трогай резерв, верни NEED_RESERVE_CONFIRM. Покупку завершит кнопка, не слово «да».
     Новая фраза клиента — новый вызов, даже если такая покупка уже была.
@@ -435,6 +440,9 @@ def execute_buy(ticker: str, shares: int) -> str:
     if not email:
         return _no_client()
     if not _from_ticket():
+        conflict = policy.order_conflict(store.turn_phrase(email), ticker, shares)
+        if conflict:
+            return _dump({"status": "ERROR", "error": conflict, "message": conflict})
         blocked = store.turn_block(email, "execute_buy")
         if blocked:
             return _dump({"status": "ERROR", "error": blocked})
@@ -551,7 +559,11 @@ def confirm_reserve_purchase() -> str:
     pending = book.get("pending_reserve")
     if not pending:
         return _dump({"status": "ERROR", "error": "нет отложенной покупки, подтверждать нечего"})
-    return _finish_buy(email, pending["ticker"], int(pending["shares"]), use_reserve=True)
+    _TLS.ticket_ok = True
+    try:
+        return _finish_buy(email, pending["ticker"], int(pending["shares"]), use_reserve=True)
+    finally:
+        _TLS.ticket_ok = False
 
 
 @mcp.tool()
@@ -617,6 +629,10 @@ def execute_sell(ticker: str, shares: int) -> str:
     email, _name = _client_profile()
     if not email:
         return _no_client()
+    if not _from_ticket():
+        conflict = policy.order_conflict(store.turn_phrase(email), ticker, shares)
+        if conflict:
+            return _dump({"status": "ERROR", "error": conflict, "message": conflict})
     book = ledger.get_book(email)
     have = int(book["positions"].get(ticker, 0))
     if policy.sell_all_of_ticker(store.turn_phrase(email)) == ticker and have > 0:
@@ -659,10 +675,13 @@ def execute_sell(ticker: str, shares: int) -> str:
         if not store.claim_trade(email):
             return _dump({"status": "ERROR", "error": "В этой реплике уже есть проводка."})
         if usd > policy.AMOUNT_NEEDS_CONFIRM:
-            prompt = (
-                f"Продажа {shares} {ticker} на {usd} ₽ выше порога "
-                f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
-            )
+            if policy.AMOUNT_NEEDS_CONFIRM <= 0:
+                prompt = f"Нажмите «Да, подтвердить». Продажа {shares} {ticker} на {usd} ₽."
+            else:
+                prompt = (
+                    f"Продажа {shares} {ticker} на {usd} ₽ выше порога "
+                    f"{policy.AMOUNT_NEEDS_CONFIRM:.0f} ₽. Нажмите «Да, подтвердить»."
+                )
             fresh = _new_ticket("large_sell", prompt, ticker=ticker, shares=shares, price_rub=round(live, 2), need_usd=usd)
             stored = _arm_ticket(email, fresh)
             if stored.get("id") != fresh["id"]:

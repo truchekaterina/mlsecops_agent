@@ -85,7 +85,10 @@ def check_direct_tools() -> None:
     assert held["shares"] == shares, port
     sell_bad = json.loads(tools.execute_sell("SBER", 1000))
     assert sell_bad["status"] == "ERROR", sell_bad
-    sell = json.loads(tools.execute_sell("SBER", shares))
+    sell_ask = json.loads(tools.execute_sell("SBER", shares))
+    assert sell_ask["status"] == "NEED_BUTTON", sell_ask
+    pending = snapshot("client@demo").get("pending_reserve") or {}
+    sell = tools.confirm_ticket(str(pending.get("id") or ""))
     assert sell["status"] == "SUCCESS", sell
     assert sell["position"] == 0, sell
     assert sell["cash_usd"] > 0, sell

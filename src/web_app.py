@@ -40,6 +40,7 @@ from policy import (  # noqa: E402
     is_sell_all,
     is_yes,
     model_intent,
+    parse_order,
     parse_transfer,
     recover_layout,
     several_companies,
@@ -340,8 +341,13 @@ async def _chat_locked(session: dict, body: ChatIn):
     several = several_companies(text)
     if several:
         return _note(session, several)
-    if model_intent(text) is None:
+    intent = model_intent(text)
+    if intent is None:
         return _note(session, OFF_TOPIC_REPLY)
+    if intent in {"buy", "sell"}:
+        order = parse_order(text)
+        if order.get("error"):
+            return _note(session, str(order["error"]))
     mixed = _open_money_turn(session, text)
     if mixed:
         return _note(session, mixed)

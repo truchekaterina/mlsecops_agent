@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
-AMOUNT_NEEDS_CONFIRM = 1000.0
+AMOUNT_NEEDS_CONFIRM = 0.0
 TICKET_SECONDS = 180
 
 _BUY = re.compile(r"куп(?:и|ить|лю|им)|(?<!\w)капи(?!\w)", re.IGNORECASE)
@@ -101,6 +101,101 @@ def several_companies(text: str) -> str | None:
     )
 
 
+_SHARE_WORDS = (
+    ("десять", 10),
+    ("девять", 9),
+    ("восемь", 8),
+    ("семь", 7),
+    ("шесть", 6),
+    ("пять", 5),
+    ("четыре", 4),
+    ("три", 3),
+    ("две", 2),
+    ("два", 2),
+    ("одну", 1),
+    ("одна", 1),
+    ("один", 1),
+    ("одно", 1),
+)
+
+_NAME_PAPER = (
+    "Назовите одну бумагу из каталога: Сбер, Газпром, Лукойл, "
+    "Норникель, Роснефть или Яндекс."
+)
+
+
+def _share_count(text: str) -> tuple[int | None, str | None]:
+    """Число акций из фразы. Нет числа — одна штука. Дробь и ноль — отказ."""
+    low = (text or "").lower().replace("ё", "е")
+    digit_at: tuple[int, int] | None = None
+    match = _NUMBER.search(low)
+    if match:
+        raw = match.group(1).replace(",", ".")
+        value = float(raw)
+        if value != int(value) or int(value) < 1:
+            return None, "Нужно целое число акций, не меньше 1."
+        digit_at = (match.start(), int(value))
+    word_at: tuple[int, int] | None = None
+    for word, count in _SHARE_WORDS:
+        found = re.search(rf"(?<!\w){word}(?!\w)", low)
+        if found and (word_at is None or found.start() < word_at[0]):
+            word_at = (found.start(), count)
+    if word_at and (digit_at is None or word_at[0] < digit_at[0]):
+        return word_at[1], None
+    if digit_at:
+        return digit_at[1], None
+    if re.search(
+        r"(?<!\w)(?:одиннадцать|двенадцать|тринадцать|четырнадцать|пятнадцать|"
+        r"шестнадцать|семнадцать|восемнадцать|девятнадцать|двадцать|тридцать|"
+        r"сорок|пятьдесят|сто)(?!\w)",
+        low,
+    ):
+        return None, "Напишите число акций цифрой."
+    return 1, None
+
+
+def parse_order(text: str) -> dict:
+    """Тикер и число из фразы человека. Бумагу выбирает не модель.
+
+    shares is None — «мои акции» одной компании, то есть весь этот пакет.
+    error — фразу нельзя отдавать в покупку или продажу.
+    """
+    if utterance_class(text) not in {"buy", "sell"}:
+        return {"error": "Это не покупка и не продажа."}
+    found = companies_in(text)
+    known = {code for code in found if code != "UNKNOWN_ALFA"}
+    if not known:
+        return {"error": _NAME_PAPER}
+    if len(known) != 1:
+        return {"error": _NAME_PAPER}
+    ticker = next(iter(known))
+    if sell_all_of_ticker(text) == ticker:
+        return {"ticker": ticker, "shares": None}
+    shares, error = _share_count(text)
+    if error:
+        return {"error": error}
+    return {"ticker": ticker, "shares": shares}
+
+
+def order_conflict(phrase: str, ticker: str, shares: int) -> str | None:
+    """Отказ, если тул назвал не ту бумагу или не то число, что в реплике.
+
+    Пустая реплика — прямой вызов тула без чата, сверять не с чем.
+    """
+    if not (phrase or "").strip():
+        return None
+    order = parse_order(phrase)
+    if order.get("error"):
+        return str(order["error"])
+    wanted = str(order.get("ticker") or "")
+    if wanted != ticker:
+        return f"В сообщении названа бумага {wanted}, а не {ticker}. Книга не менялась."
+    expected = order.get("shares")
+    if expected is None or int(expected) == int(shares):
+        return None
+    return f"В сообщении названо {expected} шт., а не {shares}. Книга не менялась."
+
+
 def sell_all_of_ticker(text: str) -> str | None:
     """«Мои акции» одной компании без числа — весь этот пакет, не одна штука."""
     if utterance_class(text) != "sell" or is_sell_all(text):
@@ -108,6 +203,9 @@ def sell_all_of_ticker(text: str) -> str | None:
     if _NUMBER.search(text or ""):
         return None
     low = (text or "").lower().replace("ё", "е")
+    for word, _count in _SHARE_WORDS:
+        if re.search(rf"(?<!\w){word}(?!\w)", low):
+            return None
     if re.search(r"мо[ий]\s+акци", low) is None:
         return None
     found = companies_in(text)
