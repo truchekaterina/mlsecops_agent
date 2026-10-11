@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 AMOUNT_NEEDS_CONFIRM = 1000.0
 TICKET_SECONDS = 180
 
-_BUY = re.compile(r"куп(?:и|ить|лю|им)", re.IGNORECASE)
+_BUY = re.compile(r"куп(?:и|ить|лю|им)|(?<!\w)капи(?!\w)", re.IGNORECASE)
 _SELL = re.compile(r"прода(?:й|ть|м|дим|дите)", re.IGNORECASE)
 _SELL_ALL = re.compile(
     r"прода(?:й|ть|йте)\s+вс[её]|весь\s+портфел|все\s+(?:мои\s+)?акции",
@@ -130,6 +130,90 @@ def utterance_class(text: str) -> str:
     if sell:
         return "sell"
     return "info"
+
+
+_CATALOG = re.compile(
+    r"каталог|доступн\w*\s+акци|(?:^|\s)список(?:\s*$|\s+(?:акци|бумаг))|"
+    r"какие\s+акции\s+можно|можно\s+купить",
+    re.IGNORECASE,
+)
+_PORTFOLIO = re.compile(
+    r"портфел|что\s+куплено|какие\s+акции\s+(?:у\s+меня|куплен)|"
+    r"какие\s+куплен|мои\s+акции",
+    re.IGNORECASE,
+)
+_MOZHNO_KUPIT = re.compile(r"можно\s+купить", re.IGNORECASE)
+_RATES = re.compile(r"курс|валют|доллар|евро|юан", re.IGNORECASE)
+_ACCOUNT = re.compile(r"сч[её]т|баланс|сколько\s+денег|резерв", re.IGNORECASE)
+
+OFF_TOPIC_REPLY = (
+    "Это сообщение не отправляется модели. "
+    "Напишите покупку, продажу, счёт, портфель, список акций или курс валют."
+)
+
+
+def model_intent(text: str) -> str | None:
+    """Намерение, которое можно отдать модели. Остальное до неё не доходит.
+
+    buy, sell и mixed разбирает utterance_class. Справка — только счёт,
+    портфель, каталог акций и курс. Чужой смысл вроде «кто ты» или арифметики
+    возвращает None, даже если в нём нет слов из story_block.
+    """
+    raw = (text or "").lower().replace("ё", "е")
+    if _CATALOG.search(raw):
+        without_catalog_verb = _MOZHNO_KUPIT.sub(" ", raw)
+        if utterance_class(without_catalog_verb) not in {"buy", "sell"}:
+            return "catalog"
+    kind = utterance_class(text)
+    if kind in {"buy", "sell", "mixed"}:
+        return kind
+    if _PORTFOLIO.search(raw):
+        return "portfolio"
+    if _RATES.search(raw):
+        return "rates"
+    if _ACCOUNT.search(raw):
+        return "account"
+    return None
+
+
+_EN_TO_RU = str.maketrans(
+    "qwertyuiop[]asdfghjkl;'zxcvbnm,.",
+    "йцукенгшщзхъфывапролджэячсмитьбю",
+)
+
+
+def en_layout_to_ru(text: str) -> str | None:
+    """Русский текст, набранный в английской раскладке. Уже русский текст не трогает."""
+    raw = text or ""
+    if re.search(r"[А-Яа-яЁё]", raw) or not re.search(r"[A-Za-z]", raw):
+        return None
+    mapped = raw.lower().translate(_EN_TO_RU)
+    if not re.search(r"[а-яё]", mapped):
+        return None
+    return mapped
+
+
+def recover_layout(text: str) -> tuple[str | None, str | None]:
+    """Вернуть русскую фразу, если после раскладки это известное намерение.
+
+    Первый элемент — текст для дальнейших проверок. Второй — отказ story_block,
+    если в русской фразе запретный оборот.
+    """
+    mapped = en_layout_to_ru(text)
+    if not mapped:
+        return None, None
+    blocked = story_block(mapped)
+    if blocked:
+        return None, blocked
+    if (
+        model_intent(mapped)
+        or parse_transfer(mapped)
+        or is_sell_all(mapped)
+        or is_yes(mapped)
+        or is_no(mapped)
+    ):
+        return mapped, None
+    return None, None
 
 
 def parse_transfer(text: str) -> dict | None:

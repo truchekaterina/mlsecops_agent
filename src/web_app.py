@@ -35,10 +35,13 @@ from mcp_strazh import (  # noqa: E402
     set_client,
 )
 from policy import (  # noqa: E402
+    OFF_TOPIC_REPLY,
     is_no,
     is_sell_all,
     is_yes,
+    model_intent,
     parse_transfer,
+    recover_layout,
     several_companies,
     story_block,
     utterance_class,
@@ -302,6 +305,12 @@ async def _chat_locked(session: dict, body: ChatIn):
     blocked = story_block(text)
     if blocked:
         return _note(session, blocked)
+    decoded, decoded_block = recover_layout(text)
+    if decoded_block:
+        return _note(session, decoded_block)
+    if decoded:
+        text = decoded
+        hist[-1]["content"] = text
     if asks_about_other_user(text, session["email"], session["name"]):
         return _note(session, OTHER_USER_REPLY)
     pending = snapshot(session["email"]).get("pending_reserve")
@@ -331,6 +340,8 @@ async def _chat_locked(session: dict, body: ChatIn):
     several = several_companies(text)
     if several:
         return _note(session, several)
+    if model_intent(text) is None:
+        return _note(session, OFF_TOPIC_REPLY)
     mixed = _open_money_turn(session, text)
     if mixed:
         return _note(session, mixed)
