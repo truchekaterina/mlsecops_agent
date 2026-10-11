@@ -28,3 +28,4 @@ mailpit-windows-amd64.zip
 __pycache__/
 *.pyc
 .venv/
+.cursor/

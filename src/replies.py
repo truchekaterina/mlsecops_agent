@@ -38,26 +38,8 @@ def format_holdings(snap: dict) -> str:
     return "\n".join(lines)
 
 
-_PLACEHOLDER = re.compile(
-    r"^(?:ok|ок|ход закрыт|hod закрыт|·)[.!]?$",
-    re.IGNORECASE,
-)
-_LEAK_OUT = re.compile(
-    r"execute_buy|execute_sell|list_instruments|get_account|get_portfolio|"
-    r"NEED_RESERVE|NEED_BUTTON|status=|create_agent|"
-    r"Ты учебный ИИ|ход закрыт|системн\w*\s+инструкц",
-    re.IGNORECASE,
-)
 _FX_NAMES = {"USD": "доллар США", "EUR": "евро", "CNY": "китайский юань"}
-LEAK_REPLY = "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку."
-
-
-def is_placeholder(text: str) -> bool:
-    return _PLACEHOLDER.fullmatch((text or "").strip()) is not None
-
-
-def hides_internals(text: str) -> bool:
-    return _LEAK_OUT.search(text or "") is not None
+NO_TOOL_REPLY = "Повторите, что купить, продать или показать: портфель, счёт или курс валют."
 
 
 def format_rates(payloads: list[dict]) -> str | None:
@@ -356,7 +338,7 @@ def compose_chat_reply(
     pending = snap.get("pending_reserve")
 
     if payload and payload.get("status") == "ERROR":
-        text = payload.get("message") or payload.get("error") or model_text
+        text = payload.get("message") or payload.get("error") or "Операция не выполнена."
         if payload.get("have") is not None:
             have = int(payload.get("have") or 0)
             if have <= 0:
@@ -433,8 +415,4 @@ def compose_chat_reply(
             "Сделка не записана: в учёте ничего не менялось.\n"
             f"{format_portfolio(snap)}"
         )
-    if is_placeholder(model_text) or not (model_text or "").strip():
-        return "Повторите, что купить, продать или показать: портфель, счёт или курс валют."
-    if hides_internals(model_text):
-        return LEAK_REPLY
-    return model_text
+    return NO_TOOL_REPLY
