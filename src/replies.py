@@ -42,11 +42,22 @@ _PLACEHOLDER = re.compile(
     r"^(?:ok|ок|ход закрыт|hod закрыт|·)[.!]?$",
     re.IGNORECASE,
 )
+_LEAK_OUT = re.compile(
+    r"execute_buy|execute_sell|list_instruments|get_account|get_portfolio|"
+    r"NEED_RESERVE|NEED_BUTTON|status=|create_agent|"
+    r"Ты учебный ИИ|ход закрыт|системн\w*\s+инструкц",
+    re.IGNORECASE,
+)
 _FX_NAMES = {"USD": "доллар США", "EUR": "евро", "CNY": "китайский юань"}
+LEAK_REPLY = "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку."
 
 
 def is_placeholder(text: str) -> bool:
     return _PLACEHOLDER.fullmatch((text or "").strip()) is not None
+
+
+def hides_internals(text: str) -> bool:
+    return _LEAK_OUT.search(text or "") is not None
 
 
 def format_rates(payloads: list[dict]) -> str | None:
@@ -424,4 +435,6 @@ def compose_chat_reply(
         )
     if is_placeholder(model_text) or not (model_text or "").strip():
         return "Повторите, что купить, продать или показать: портфель, счёт или курс валют."
+    if hides_internals(model_text):
+        return LEAK_REPLY
     return model_text

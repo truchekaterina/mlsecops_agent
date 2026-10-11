@@ -18,6 +18,14 @@ _TRANSFER = re.compile(r"перев(?:е|о)д", re.IGNORECASE)
 _NUMBER = re.compile(r"(\d+(?:[.,]\d+)?)")
 _ACCOUNT_NO = re.compile(r"\d{12,}")
 _PANIC = re.compile(r"паник|обвал|слух", re.IGNORECASE)
+_LEAK_ASK = re.compile(
+    r"забудь\s+(?:правила|инструкц)"
+    r"|(?:покажи(?:те)?|выведи|повтори|раскрой)\s+(?:мне\s+)?"
+    r"(?:свою\s+)?(?:системн\w*|инструкц\w*|промпт|правила\s+системы)"
+    r"|system\s+prompt"
+    r"|ignore\s+(?:previous|all)\s+instructions?",
+    re.IGNORECASE,
+)
 _YES = re.compile(r"^\s*да\s*[.!]?\s*$", re.IGNORECASE)
 _NO = re.compile(r"^\s*(?:нет|отмена)\s*[.!]?\s*$", re.IGNORECASE)
 _NAME = re.compile(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё \-]{0,79}\Z")
@@ -33,6 +41,8 @@ def clean_name(name: str) -> str:
 def story_block(text: str) -> str | None:
     raw = text or ""
     if _PANIC.search(raw):
+        return "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку."
+    if _LEAK_ASK.search(raw):
         return "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку."
     if _ACCOUNT_NO.search(raw):
         return "Номер счёта в сообщении не принимается."

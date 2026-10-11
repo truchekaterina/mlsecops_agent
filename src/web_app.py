@@ -63,8 +63,11 @@ _lock = asyncio.Lock()
 _user_locks: dict[str, asyncio.Lock] = {}
 _user_locks_guard = asyncio.Lock()
 _login_fails: dict[str, list[float]] = {}
+_chat_hits: dict[str, list[float]] = {}
 _LOGIN_LIMIT = 8
 _LOGIN_WINDOW = 60.0
+_CHAT_LIMIT = 4
+_CHAT_WINDOW = 60.0
 _AGENT_TIMEOUT_SECONDS = 180
 
 
@@ -140,6 +143,22 @@ def _login_failed(ip: str) -> None:
 
 def _login_ok(ip: str) -> None:
     _login_fails.pop(ip, None)
+
+
+def _chat_limited(email: str) -> bool:
+    now = time.monotonic()
+    key = (email or "").strip().lower()
+    hits = [stamp for stamp in _chat_hits.get(key, []) if now - stamp < _CHAT_WINDOW]
+    _chat_hits[key] = hits
+    return len(hits) >= _CHAT_LIMIT
+
+
+def _chat_used(email: str) -> None:
+    now = time.monotonic()
+    key = (email or "").strip().lower()
+    hits = [stamp for stamp in _chat_hits.get(key, []) if now - stamp < _CHAT_WINDOW]
+    hits.append(now)
+    _chat_hits[key] = hits[-_CHAT_LIMIT:]
 
 
 def _set_session_cookie(resp: JSONResponse, token: str) -> JSONResponse:
@@ -315,6 +334,9 @@ async def _chat_locked(session: dict, body: ChatIn):
     mixed = _open_money_turn(session, text)
     if mixed:
         return _note(session, mixed)
+    if _chat_limited(session["email"]):
+        return _note(session, "Слишком много запросов к модели. Подождите минуту.")
+    _chat_used(session["email"])
     agent, _tools, _client = await _agent_for(session)
     try:
         result = await asyncio.wait_for(
