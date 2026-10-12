@@ -56,8 +56,8 @@ def _system_prompt(session: dict | None) -> str:
 
 def _cbr_command() -> tuple[str, list[str]]:
     if UVX and Path(UVX).exists():
-        return UVX, ["atomno-mcp-cbr-rates"]
-    return UV, ["tool", "run", "atomno-mcp-cbr-rates"]
+        return UVX, ["atomno-mcp-cbr-rates==0.1.11"]
+    return UV, ["tool", "run", "atomno-mcp-cbr-rates==0.1.11"]
 
 
 async def build_agent(session: dict | None = None):

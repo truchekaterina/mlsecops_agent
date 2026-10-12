@@ -5,7 +5,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONIOENCODING=utf-8 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/root/.local/bin:${PATH}" \
-    STRAZH_DEMO_USERS=1 \
     STRAZH_MAIL_URL=http://127.0.0.1:8090 \
     STRAZH_MODEL=qwen2.5:3b \
     STRAZH_NUM_CTX=4096
@@ -17,8 +16,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt uv \
-    && uv tool install atomno-mcp-cbr-rates
+RUN pip install --no-cache-dir -r /app/requirements.txt 'uv==0.13.0' \
+    && uv tool install 'atomno-mcp-cbr-rates==0.1.11'
 
 COPY src /app/src
 COPY static /app/static
