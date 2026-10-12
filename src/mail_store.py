@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -80,7 +79,7 @@ def init() -> None:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
             _ensure_action_hash(conn)
-            _seed(conn)
+            _drop_demo(conn)
             conn.commit()
         finally:
             conn.close()
@@ -93,24 +92,20 @@ def _ensure_action_hash(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE messages ADD COLUMN action_hash TEXT")
 
 
-def _seed(conn: sqlite3.Connection) -> None:
-    if os.environ.get("STRAZH_DEMO_USERS", "").strip().lower() not in {"1", "true", "yes"}:
-        return
-    created = now_iso()
-    for email, password in (("client@demo", "demo"), ("katya@demo", "katya")):
-        exists = conn.execute(
-            "SELECT 1 FROM mailboxes WHERE email=?",
-            (email,),
-        ).fetchone()
-        if exists:
-            continue
-        conn.execute(
-            """
-            INSERT INTO mailboxes(email, password_sha256, created_at)
-            VALUES(?, ?, ?)
-            """,
-            (email, hash_password(password), created),
-        )
+_DEMO_EMAILS = ("client@demo", "katya@demo")
+
+
+def _drop_demo(conn: sqlite3.Connection) -> None:
+    keys = list(_DEMO_EMAILS)
+    try:
+        secret = action_hash.mail_secret()
+    except RuntimeError:
+        secret = ""
+    if secret:
+        keys.extend(action_hash.actor_hash(email, secret=secret) for email in _DEMO_EMAILS)
+    for key in keys:
+        conn.execute("DELETE FROM messages WHERE email=?", (key,))
+        conn.execute("DELETE FROM mailboxes WHERE email=?", (key,))
 
 
 def mailbox_exists(email: str) -> bool:

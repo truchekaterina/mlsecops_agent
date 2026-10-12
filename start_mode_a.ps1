@@ -44,7 +44,6 @@ if ($mailSecret.Length -lt 16) {
     exit 1
 }
 $env:STRAZH_MAIL_SECRET = $mailSecret
-$env:STRAZH_DEMO_USERS = "1"
 
 Start-Process -FilePath $python -ArgumentList @(
     "-m", "uvicorn", "mail_app:app", "--host", "127.0.0.1", "--port", "8090"

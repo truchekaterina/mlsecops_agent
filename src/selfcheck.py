@@ -40,24 +40,39 @@ def _kinds() -> list[str]:
     return out
 
 
+_DEMO_LOGINS = {"client@demo", "katya@demo"}
+
+
+def _selfcheck_login() -> tuple[str, str]:
+    email = os.environ.get("STRAZH_SELFCHECK_EMAIL", "").strip().lower()
+    password = os.environ.get("STRAZH_SELFCHECK_PASSWORD", "")
+    if not email or not password or email in _DEMO_LOGINS:
+        raise SystemExit(
+            "Самопроверка не входит адресами client@demo и katya@demo. "
+            "Задайте STRAZH_SELFCHECK_EMAIL и STRAZH_SELFCHECK_PASSWORD."
+        )
+    return email, password
+
+
 def check_auth() -> dict:
     print("=== Вход клиента ===")
-    session = login("client@demo", "demo", persist=True)
+    email, password = _selfcheck_login()
+    session = login(email, password, persist=True)
     claims = decode_jwt(session["token"], signing_secret())
-    assert claims["sub"] == "client@demo", claims
+    assert claims["sub"] == email, claims
     assert "email" not in claims and "name" not in claims
-    assert session["name"] == "Клиент"
+    assert session["name"]
     os.environ["STRAZH_CLIENT_EMAIL"] = session["email"]
     os.environ["STRAZH_CLIENT_NAME"] = session["name"]
     print("  JWT:", session["email"], session["name"], "OK")
     return session
 
 
-def check_direct_tools() -> None:
+def check_direct_tools(email: str) -> None:
     print("=== Прямые тулы MCP (без модели) ===")
     _reset_log()
-    reset_book("client@demo")
-    clear_history("client@demo")
+    reset_book(email)
+    clear_history(email)
     inst = json.loads(tools.list_instruments())
     sber = next((x for x in inst["instruments"] if x["ticker"] == "SBER"), None)
     assert inst["status"] == "SUCCESS" and sber and sber.get("price_rub"), inst
@@ -87,12 +102,12 @@ def check_direct_tools() -> None:
     assert sell_bad["status"] == "ERROR", sell_bad
     sell_ask = json.loads(tools.execute_sell("SBER", shares))
     assert sell_ask["status"] == "NEED_BUTTON", sell_ask
-    pending = snapshot("client@demo").get("pending_reserve") or {}
+    pending = snapshot(email).get("pending_reserve") or {}
     sell = tools.confirm_ticket(str(pending.get("id") or ""))
     assert sell["status"] == "SUCCESS", sell
     assert sell["position"] == 0, sell
     assert sell["cash_usd"] > 0, sell
-    assert sell.get("email_to") == "client@demo", sell
+    assert sell.get("email_to") == email, sell
     mail = json.loads(
         tools.send_trade_email(
             side="SELL",
@@ -104,27 +119,29 @@ def check_direct_tools() -> None:
         )
     )
     assert mail["status"] == "SUCCESS", mail
-    assert mail.get("to") == "client@demo", mail
+    assert mail.get("to") == email, mail
     assert mail.get("message_id"), mail
-    saved = list_messages("client@demo")
-    assert saved and saved[0]["email"] == "client@demo", saved
+    saved = list_messages(email)
+    assert saved and saved[0]["email"] == email, saved
     kinds = _kinds()
     assert "BUY" in kinds and "SELL" in kinds and "RESERVE_ASK" in kinds and "ACCOUNT" in kinds, kinds
-    snap = snapshot("client@demo")
+    snap = snapshot(email)
     fake = compose_chat_reply(
         model_text="Вы купили 1 Apple. NVIDIA (NVDA): 6 шт.",
         used=[],
         payloads=[],
         snap=snap,
-        email="client@demo",
+        email=email,
         user_message="купи 1 акцию Apple",
     )
     assert "не записана" in fake, fake
     assert "6 шт" not in fake, fake
-    katya = snapshot("katya@demo")
-    assert katya["email"] == "katya@demo"
+    other = os.environ.get("STRAZH_SELFCHECK_OTHER", "").strip().lower()
     assert snap["cash_usd"] > 0
-    assert katya["cash_usd"] != snap["cash_usd"]
+    if other and other not in _DEMO_LOGINS and other != email:
+        other_snap = snapshot(other)
+        assert other_snap["email"] == other
+        assert other_snap["cash_usd"] != snap["cash_usd"]
     print("  catalog / account / portfolio / buy / reserve / sell — OK")
     print("  trades.log:", kinds)
     print("  smtp_ok:", mail.get("smtp_ok"))
@@ -190,7 +207,7 @@ def main() -> None:
     session = check_auth()
     reset_book(session["email"])
     clear_history(session["email"])
-    check_direct_tools()
+    check_direct_tools(session["email"])
     skip = os.environ.get("STRAZH_SKIP_AGENT", "").strip() in ("1", "true", "yes")
     if skip:
         print("STRAZH_SKIP_AGENT=1 — прогоны модели пропущены")

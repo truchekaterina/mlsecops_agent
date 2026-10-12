@@ -87,7 +87,6 @@ def ensure_model(url: str, model: str) -> None:
 def main() -> None:
     os.environ["STRAZH_JWT_SECRET"] = ensure_jwt()
     os.environ["STRAZH_MAIL_SECRET"] = ensure_mail_secret()
-    os.environ.setdefault("STRAZH_DEMO_USERS", "1")
     os.environ.setdefault("STRAZH_MAIL_URL", "http://127.0.0.1:8090")
     ollama = os.environ.get("STRAZH_OLLAMA_URL", "http://127.0.0.1:11434")
     model = os.environ.get("STRAZH_MODEL", "qwen2.5:3b")

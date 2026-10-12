@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 import time
@@ -138,7 +137,7 @@ def init() -> None:
             _ensure_revoked(conn)
             _ensure_turn_gate(conn)
             _migrate_json(conn)
-            _seed_if_empty(conn)
+            _drop_demo_accounts(conn)
             _backfill_mailboxes(conn)
             conn.commit()
         finally:
@@ -297,8 +296,27 @@ def claim_trade(email: str) -> bool:
         return cur.rowcount == 1
 
 
-def demo_users_enabled() -> bool:
-    return os.environ.get("STRAZH_DEMO_USERS", "").strip().lower() in {"1", "true", "yes"}
+_DEMO_EMAILS = ("client@demo", "katya@demo")
+
+
+def _drop_demo_accounts(conn: sqlite3.Connection) -> None:
+    """Учебные входы из README больше не живут в базе. Чужие учётки не трогает."""
+    keys = list(_DEMO_EMAILS)
+    row = conn.execute("SELECT value FROM meta WHERE key='jwt_secret'").fetchone()
+    secret = str(row["value"]).strip() if row else ""
+    if len(secret) >= 16:
+        import action_hash
+
+        keys.extend(action_hash.actor_hash(email, secret=secret) for email in _DEMO_EMAILS)
+    existing = {item[0] for item in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in ("users", "accounts", "positions", "mailboxes", "messages", "trades", "turn_gate"):
+        if table not in existing:
+            continue
+        cols = {item[1] for item in conn.execute(f"PRAGMA table_info({table})")}
+        if "email" not in cols:
+            continue
+        for key in keys:
+            conn.execute(f"DELETE FROM {table} WHERE email=?", (key,))
 
 
 def _ensure_revoked(conn: sqlite3.Connection) -> None:
@@ -332,38 +350,6 @@ def token_revoked(jti: str) -> bool:
             (jti,),
         ).fetchone()
     return row is not None
-
-
-def _seed_if_empty(conn: sqlite3.Connection) -> None:
-    n = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
-    if n:
-        return
-    if not demo_users_enabled():
-        return
-    from password_hash import hash_password
-
-    def hp(p: str) -> str:
-        return hash_password(p)
-
-    for email, name, password in (
-        ("client@demo", "Клиент", "demo"),
-        ("katya@demo", "Катя", "katya"),
-    ):
-        created = now_iso()
-        conn.execute(
-            """
-            INSERT INTO mailboxes(email, created_at)
-            VALUES(?, ?)
-            """,
-            (email, created),
-        )
-        conn.execute(
-            """
-            INSERT INTO users(email, name, password_sha256, created_at)
-            VALUES(?, ?, ?, ?)
-            """,
-            (email, name, hp(password), created),
-        )
 
 
 def _backfill_mailboxes(conn: sqlite3.Connection) -> None:
