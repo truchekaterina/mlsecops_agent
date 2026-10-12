@@ -1,21 +1,78 @@
-"""Чат в терминале. Сначала вход, потом сделки. Режим A, без слоёв защиты."""
+"""Терминал ходит в уже собранный /api/chat. Своего вызова модели здесь нет."""
 
 from __future__ import annotations
 
-import asyncio
+import json
 import os
 import sys
-from pathlib import Path
+import urllib.error
+import urllib.request
+from http.cookiejar import CookieJar
 
-os.environ.setdefault("OLLAMA_NUM_GPU", "0")
 
-from auth import login, register, require_session  # noqa: E402
-from agent_mode_a import build_agent, last_text, rate_codes, tool_json_payloads, tools_used  # noqa: E402
-from ledger import snapshot  # noqa: E402
-from mcp_strazh import set_client  # noqa: E402
-from replies import OTHER_USER_REPLY, asks_about_other_user, compose_chat_reply  # noqa: E402
+def web_base() -> str:
+    return os.environ.get("STRAZH_WEB_URL", "http://127.0.0.1:8080").rstrip("/")
 
-DIR = Path(__file__).resolve().parent
+
+def ticket_action(word: str) -> str | None:
+    text = (word or "").strip().lower()
+    if text == "подтвердить":
+        return "confirm"
+    if text == "отмена":
+        return "deny"
+    return None
+
+
+def ticket_path(action: str) -> str:
+    if action == "confirm":
+        return "/api/reserve/confirm"
+    if action == "deny":
+        return "/api/reserve/deny"
+    raise ValueError("Нет такой кнопки заявки.")
+
+
+class Client:
+    def __init__(self, base: str | None = None):
+        self.base = (base or web_base()).rstrip("/")
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
+
+    def post(self, path: str, body: dict, timeout: float = 30) -> tuple[int, dict]:
+        req = urllib.request.Request(
+            self.base + path,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self.opener.open(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                return resp.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {"detail": raw or str(exc.reason)}
+            if not isinstance(payload, dict):
+                payload = {"detail": str(payload)}
+            return exc.code, payload
+        except urllib.error.URLError as exc:
+            return 0, {"detail": f"Страница Стража не отвечает на {self.base}. Сначала запустите сервис. {exc.reason}"}
+
+
+def detail(payload: dict) -> str:
+    value = payload.get("detail")
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, dict):
+                parts.append(str(item.get("msg") or item))
+            else:
+                parts.append(str(item))
+        return "; ".join(parts) or "Сервис не ответил."
+    if value:
+        return str(value)
+    return str(payload.get("text") or "Сервис не ответил.")
 
 
 def _fix_stdio() -> None:
@@ -24,12 +81,11 @@ def _fix_stdio() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
-def _ask(prompt: str, secret: bool = False) -> str:
-    # Учебный стенд: пароль виден в терминале, иначе getpass в Windows «молчит».
+def _ask(prompt: str) -> str:
     return input(prompt).strip()
 
 
-def authorize() -> dict:
+def authorize(client: Client) -> dict:
     print("Вход в учебный стенд «Страж». Без логина чат закрыт.")
     print("Регистрация заводит ящик на ту же почту. Письма — на http://127.0.0.1:8090")
     print()
@@ -38,55 +94,52 @@ def authorize() -> dict:
         if not ident:
             print("Нужен email или имя.")
             continue
-        password = _ask("Пароль: ", secret=True)
+        password = _ask("Пароль: ")
         if not password:
             print("Регистрация новой учётки.")
             name = _ask("Как к вам обращаться: ") or ident
             email = ident if "@" in ident else _ask("Почта для писем: ")
-            password = _ask("Придумайте пароль: ", secret=True)
-            try:
-                user = register(name, email, password)
-                return login(user["email"], password, persist=True)
-            except ValueError as e:
-                print("Не вышло:", e)
-                continue
-        try:
-            session = login(ident, password, persist=True)
-            return session
-        except KeyError:
-            print("Учётки нет. Зарегистрировать эту почту? (д/н)")
+            password = _ask("Придумайте пароль: ")
+            status, payload = client.post(
+                "/api/register",
+                {"name": name, "email": email, "password": password},
+            )
+            if status == 200:
+                return payload
+            print("Не вышло:", detail(payload))
+            continue
+        status, payload = client.post("/api/login", {"login": ident, "password": password})
+        if status == 200:
+            return payload
+        if status == 401:
+            print("Учётки нет или пароль неверный. Зарегистрировать эту почту? (д/н)")
             if _ask("> ").lower() not in ("д", "да", "y", "yes"):
                 continue
             name = _ask("Как к вам обращаться: ") or ident
             email = ident if "@" in ident else _ask("Почта для писем: ")
-            try:
-                register(name, email, password)
-                return login(email, password, persist=True)
-            except ValueError as e:
-                print("Не вышло:", e)
-        except PermissionError:
-            print("Неверный пароль.")
+            status, payload = client.post(
+                "/api/register",
+                {"name": name, "email": email, "password": password},
+            )
+            if status == 200:
+                return payload
+            print("Не вышло:", detail(payload))
+            continue
+        print("Не вышло:", detail(payload))
     raise SystemExit("Вход не удался. Чат не открыт.")
 
 
-async def main() -> None:
+def main() -> None:
     _fix_stdio()
-    session = authorize()
-    session = require_session(session)
-    set_client(session["email"], session["name"])
-    os.environ["STRAZH_CLIENT_EMAIL"] = session["email"]
-    os.environ["STRAZH_CLIENT_NAME"] = session["name"]
+    client = Client()
+    session = authorize(client)
     print()
-    print(f"Вошли: {session['name']} <{session['email']}>")
+    print(f"Вошли: {session.get('name')} <{session.get('email')}>")
     print("Письма о покупке/продаже — в вашем ящике: http://127.0.0.1:8090")
-    print("Режим A — без защиты. Модель думает, тулы жмутся.")
+    print(f"Фразы идут на тот же адрес, что страница: {client.base}/api/chat")
+    print("Заявка подтверждается словом «подтвердить», не словом «да».")
     print("Выход: пустая строка или Ctrl+C.")
-    print("Собираю агент и MCP (ЦБ + strazh)...")
-    agent, tools, _client = await build_agent(session)
-    names = ", ".join(sorted(t.name for t in tools))
-    print(f"Тулы: {names}")
     print()
-    hist: list[dict] = []
     while True:
         try:
             text = input("Клиент: ").strip()
@@ -95,34 +148,23 @@ async def main() -> None:
             break
         if not text:
             break
-        if asks_about_other_user(text, session["email"], session["name"]):
-            print("Агент:", OTHER_USER_REPLY)
+        status, payload = client.post("/api/chat", {"message": text}, timeout=200)
+        if status != 200:
+            print("Агент:", detail(payload))
             print()
             continue
-        print("... думаю (на CPU может быть 20–60 сек)")
-        hist.append({"role": "user", "content": text})
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": text}]},
-            config={"recursion_limit": 25},
-        )
-        snap = snapshot(session["email"])
-        used = tools_used(result)
-        payloads = tool_json_payloads(result)
-        reply = compose_chat_reply(
-            model_text=last_text(result),
-            used=used,
-            payloads=payloads,
-            snap=snap,
-            email=session["email"],
-            user_message=text,
-            asked_rates=rate_codes(result),
-        )
-        if len(hist) > 40:
-            del hist[:-40]
-        print("Агент:", reply)
+        print("Агент:", payload.get("text") or "")
+        ticket = payload.get("needs_reserve_confirm")
+        if isinstance(ticket, dict) and ticket.get("id"):
+            answer = _ask("Кнопка заявки — «подтвердить» или «отмена»: ")
+            action = ticket_action(answer)
+            if action is None:
+                print("Заявка остаётся открытой. Подтверждение — только кнопка.")
+            else:
+                done_status, done = client.post(ticket_path(action), {"id": str(ticket["id"])})
+                print("Агент:", done.get("text") if done_status == 200 else detail(done))
         print()
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(DIR))
-    asyncio.run(main())
+    main()
