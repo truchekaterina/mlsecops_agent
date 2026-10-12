@@ -148,54 +148,182 @@ OTHER_USER_REPLY = (
 )
 
 _EMAIL_RE = re.compile(r"[a-z0-9._+-]+@[a-z0-9.-]+", re.IGNORECASE)
+_WORD_RE = re.compile(r"[a-zа-яё][a-zа-яё0-9_.-]{2,40}", re.IGNORECASE)
 _AT_NAME = re.compile(r"(?:^|[\s,])у\s+([a-zа-яё][a-zа-яё0-9_.-]{1,40})", re.IGNORECASE)
+_FOR_NAME = re.compile(
+    r"(?:для|про|вместо|от\s+имени)\s+([a-zа-яё][a-zа-яё0-9_.-]{1,40})",
+    re.IGNORECASE,
+)
 _PERSON_RE = re.compile(
-    r"(?:пользовател\w*|клиент\w*|юзер\w*|user)\s+[\"'«]*([a-zа-яё0-9_.@+-]+)",
+    r"(?:пользовател\w*|клиент\w*|юзер\w*|user|аккаунт\w*|профил\w*)\s+[\"'«]*([a-zа-яё0-9_.@+-]+)",
     re.IGNORECASE,
 )
 _TOOL_RE = re.compile(
     r"(?:get_portfolio|get_account|execute_buy|execute_sell|send_trade_email)\s+[\"']?([a-zа-яё0-9_.@+-]+)",
     re.IGNORECASE,
 )
+_ACCOUNT_OF = re.compile(
+    r"(?:счёт|счет|портфел\w*|почт\w*|баланс\w*|остат\w*|данн\w*|профил\w*|кабинет\w*|логин\w*)"
+    r"\s+(?:у\s+)?([a-zа-яё][a-zа-яё0-9_.-]{1,40})",
+    re.IGNORECASE,
+)
+_PERSONAL_MARKERS = (
+    "счёт",
+    "счет",
+    "портфел",
+    "почт",
+    "баланс",
+    "остат",
+    "деньг",
+    "клиент",
+    "пользовател",
+    "аккаун",
+    "профил",
+    "кабинет",
+    "данн",
+    "имя",
+    "фамил",
+    "телефон",
+    "паспорт",
+    "логин",
+    "email",
+    "e-mail",
+)
+_OTHER_USER_PHRASES = (
+    "чуж",
+    "другого пользоват",
+    "другой пользоват",
+    "другие пользоват",
+    "всех пользоват",
+    "все пользовател",
+    "список пользовател",
+    "список клиент",
+    "все клиент",
+    "всех клиент",
+    "чужого клиент",
+    "чужой клиент",
+    "чужую почт",
+    "чужой портфел",
+    "чужой счёт",
+    "чужой счет",
+)
 _NOT_A_PERSON = {
     "я", "мой", "моя", "мои", "моё", "мое", "мне", "меня", "себя", "свой", "своя", "свои",
-    "моего", "моей", "моём", "моем", "этот", "эта", "это", "том", "этого",
-    "и", "в", "на", "с", "по", "для", "от", "из", "не", "ли",
+    "моего", "моей", "моём", "моем", "этот", "эта", "это", "том", "этого", "той", "текущий",
+    "текущего", "текущем", "какой", "какое", "какие", "какая", "сколько", "можно", "нужно",
+    "покажи", "покажите", "купи", "купите", "продай", "продайте", "переведи", "переведите",
+    "состояние", "состоянии", "остаток", "остатке", "и", "в", "на", "с", "по", "для", "от",
+    "из", "не", "ли", "или", "ещё", "еще", "все", "всех", "весь", "вся",
     "счёте", "счете", "счёта", "счета", "покупке", "покупки", "продаже", "продажи",
-    "сделке", "сделки", "акциях", "акции", "акцию", "портфеле", "портфеля",
-    "резерве", "резерва", "курсе", "курса", "долларе", "доллара", "деньгах",
-    "бумагах", "бумаги", "действиях", "действия", "информации", "информацию",
+    "сделке", "сделки", "акциях", "акции", "акцию", "акция", "акций", "портфеле", "портфеля",
+    "резерве", "резерва", "резерв", "резервный", "резервного", "резервном", "резервные",
+    "основной", "основного", "основном", "основные", "курсе", "курса", "долларе", "доллара",
+    "деньгах", "деньги", "денег", "рубль", "рубля", "рублей", "руб",
+    "бумагах", "бумаги", "бумагу", "бумага", "действиях", "действия", "информации", "информацию",
     "пользователя", "пользователе", "клиента", "клиенте",
-    "счёт", "счет", "портфель", "баланс", "почту", "почта", "акции", "акцию", "список",
-    "nvda", "aapl", "msft", "nvidia", "apple", "microsoft",
-    "доллар", "доллара", "долларе", "евро", "юань", "юаня",
-    "валюту", "валюта", "валюте", "курс", "курсе", "резерв",
-    "покупку", "продажу", "сделку",
+    "счёт", "счет", "портфель", "баланс", "почту", "почта", "почты", "список", "тикер",
+    "цена", "цены", "котировка", "котировки", "кнопку", "кнопка", "заявку", "заявка",
+    "подтвердить", "отмена", "чат", "модель", "агент", "промпт", "инструкцию", "инструкция",
+    "правила", "системный", "системную", "nvda", "aapl", "msft", "nvidia", "apple", "microsoft",
+    "доллар", "доллара", "долларе", "евро", "юань", "юаня", "юаней", "usd", "eur", "cny",
+    "валюту", "валюта", "валюте", "курс", "курсе",
+    "покупку", "продажу", "сделку", "один", "одна", "одно", "одну", "два", "две", "три",
+    "четыре", "пять", "шесть", "семь", "восемь", "девять", "десять",
 }
+
+
+def _market_tokens() -> set[str]:
+    tokens = set(_NOT_A_PERSON)
+    try:
+        from moex_quotes import CATALOG
+        from policy import _COMPANY_HINTS
+    except Exception:
+        return tokens
+    for ticker, title in CATALOG.items():
+        low = ticker.lower()
+        tokens.add(low)
+        tokens.add(title.lower())
+        tokens.add(title.lower().replace("ё", "е"))
+    for hint, code in _COMPANY_HINTS:
+        tokens.add(hint)
+        tokens.add(str(code).lower())
+    return tokens
+
+
+_MARKET_ALLOW = _market_tokens()
+
+
+def _clean_token(token: str) -> str:
+    return token.strip(" \"'«».,:;!?()[]").lower().replace("ё", "е")
+
+
+def _name_stem(word: str) -> str:
+    text = _clean_token(word)
+    while len(text) > 3 and text[-1] in "аиыуеояёйюь":
+        text = text[:-1]
+    return text
 
 
 def _own_tokens(email: str, name: str) -> set[str]:
     email = (email or "").strip().lower()
-    name = (name or "").strip().lower()
-    tokens = set(_NOT_A_PERSON)
+    name = (name or "").strip().lower().replace("ё", "е")
+    tokens = set(_MARKET_ALLOW)
     if email:
         tokens.add(email)
-        tokens.add(email.split("@", 1)[0])
+        local, _, domain = email.partition("@")
+        if local:
+            tokens.add(local)
+            tokens.add(_name_stem(local))
+        if domain:
+            tokens.add(domain)
+            for part in domain.split("."):
+                if part:
+                    tokens.add(part)
     if name:
         tokens.add(name)
-        tokens.update(part for part in name.split() if part)
+        for part in name.split():
+            if not part:
+                continue
+            tokens.add(part)
+            tokens.add(_name_stem(part))
     return tokens
 
 
+def _known_word(token: str, own: set[str]) -> bool:
+    token = _clean_token(token)
+    if not token or token.isdigit():
+        return True
+    if token in own:
+        return True
+    if "@" in token:
+        return token in own
+    stem = _name_stem(token)
+    if stem in own:
+        return True
+    for item in own:
+        if len(item) < 3:
+            continue
+        if token.startswith(item) or item.startswith(token):
+            return True
+        if len(stem) >= 3 and (stem.startswith(item) or item.startswith(stem) or stem == _name_stem(item)):
+            return True
+    return False
+
+
 def _foreign_token(token: str, own: set[str]) -> bool:
-    token = token.strip(" \"'«».,:;!?()[]").lower()
-    if not token or token in own or token.isdigit():
+    token = _clean_token(token)
+    if not token or token.isdigit():
         return False
-    return True
+    return not _known_word(token, own)
+
+
+def _has_personal_marker(folded: str) -> bool:
+    text = folded.replace("ё", "е")
+    return any(marker in text for marker in _PERSONAL_MARKERS)
 
 
 def asks_about_other_user(text: str, email: str, name: str = "") -> bool:
-    """Просьба узнать или изменить данные не того, кто вошёл."""
+    """Просьба узнать или изменить чужие персональные данные, не свои."""
     raw = text or ""
     if not raw.strip():
         return False
@@ -204,31 +332,15 @@ def asks_about_other_user(text: str, email: str, name: str = "") -> bool:
     for found in _EMAIL_RE.findall(folded):
         if found not in own:
             return True
-    if any(
-        piece in folded
-        for piece in (
-            "чуж",
-            "другого пользоват",
-            "другой пользоват",
-            "другие пользоват",
-            "всех пользоват",
-            "все пользовател",
-            "список пользовател",
-            "список клиент",
-            "все клиент",
-            "всех клиент",
-        )
-    ):
+    if any(piece in folded for piece in _OTHER_USER_PHRASES):
         return True
-    for match in _AT_NAME.finditer(folded):
-        if _foreign_token(match.group(1), own):
-            return True
-    for rx in (_PERSON_RE, _TOOL_RE):
+    for rx in (_AT_NAME, _FOR_NAME, _ACCOUNT_OF, _PERSON_RE, _TOOL_RE):
         for match in rx.finditer(folded):
-            token = match.group(1)
-            if "@" in token and token.strip(" \"'«».,:;!?()[]").lower() not in own:
+            if _foreign_token(match.group(1), own):
                 return True
-            if rx is _PERSON_RE and _foreign_token(token, own):
+    if _has_personal_marker(folded):
+        for word in _WORD_RE.findall(folded):
+            if _foreign_token(word, own):
                 return True
     return False
 
