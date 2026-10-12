@@ -353,7 +353,7 @@ def token_revoked(jti: str) -> bool:
 
 
 def _backfill_mailboxes(conn: sqlite3.Connection) -> None:
-    """Уже существующие учётки получают ящик, чтобы вход не сломался."""
+    """Старый список в strazh.db. Регистрация и вход его не читают."""
     conn.execute(
         """
         INSERT OR IGNORE INTO mailboxes(email, created_at)

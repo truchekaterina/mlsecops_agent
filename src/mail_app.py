@@ -116,19 +116,11 @@ async def health():
     return {"ok": True}
 
 
-@app.post("/api/mailbox")
-async def api_mailbox(body: MailboxIn):
-    try:
-        return mail_store.create_mailbox(body.email, body.password)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
 @app.post("/api/login")
 async def api_login(body: LoginIn):
     box = mail_store.find_mailbox(body.email)
     if box is None:
-        raise HTTPException(401, "Такого ящика нет. Сначала заведите почту.")
+        raise HTTPException(401, "Такого ящика нет. Он появляется при регистрации в Страже.")
     if not password_hash.password_matches(box["password_sha256"], body.password):
         raise HTTPException(401, "Неверный пароль ящика")
     if password_hash.needs_rehash(box["password_sha256"]):
@@ -169,6 +161,15 @@ async def api_inbox_one(message_id: int, request: Request):
     if not row:
         raise HTTPException(404, "Письмо не найдено")
     return row
+
+
+@app.post("/api/internal/mailbox")
+async def api_internal_mailbox(body: MailboxIn, request: Request):
+    _internal(request)
+    try:
+        return mail_store.create_mailbox(body.email, body.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/internal/exists")

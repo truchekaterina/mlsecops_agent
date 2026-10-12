@@ -9,7 +9,6 @@ from pathlib import Path
 
 os.environ.setdefault("OLLAMA_NUM_GPU", "0")
 
-import mail_client  # noqa: E402
 from auth import login, register, require_session  # noqa: E402
 from agent_mode_a import build_agent, last_text, rate_codes, tool_json_payloads, tools_used  # noqa: E402
 from ledger import snapshot  # noqa: E402
@@ -30,28 +29,9 @@ def _ask(prompt: str, secret: bool = False) -> str:
     return input(prompt).strip()
 
 
-def _prepare_mailbox(email: str) -> None:
-    """Регистрация только на ящик отдельного почтового сервиса."""
-    try:
-        if mail_client.mailbox_exists(email):
-            return
-    except mail_client.MailUnavailable as exc:
-        raise ValueError(str(exc)) from exc
-    print(f"Ящика {email} нет. Сначала заведите его в почтовом сервисе.")
-    if _ask("Завести эту почту? (д/н) ").lower() not in ("д", "да", "y", "yes"):
-        raise ValueError("Без заведённой почты регистрация недоступна.")
-    box_password = _ask("Пароль ящика: ", secret=True)
-    try:
-        mail_client.create_mailbox(email, box_password)
-    except mail_client.MailUnavailable as exc:
-        raise ValueError(str(exc)) from exc
-    print(f"Почта {email} заведена. Теперь можно регистрироваться в Страже.")
-
-
 def authorize() -> dict:
     print("Вход в учебный стенд «Страж». Без логина чат закрыт.")
-    print("Письма о сделках приходят в почтовый сервис http://127.0.0.1:8090")
-    print("Сначала заведите почту в почтовом сервисе, потом регистрируйтесь здесь.")
+    print("Регистрация заводит ящик на ту же почту. Письма — на http://127.0.0.1:8090")
     print()
     for _attempt in range(5):
         ident = _ask("Email или имя: ")
@@ -65,7 +45,6 @@ def authorize() -> dict:
             email = ident if "@" in ident else _ask("Почта для писем: ")
             password = _ask("Придумайте пароль: ", secret=True)
             try:
-                _prepare_mailbox(email)
                 user = register(name, email, password)
                 return login(user["email"], password, persist=True)
             except ValueError as e:
@@ -81,7 +60,6 @@ def authorize() -> dict:
             name = _ask("Как к вам обращаться: ") or ident
             email = ident if "@" in ident else _ask("Почта для писем: ")
             try:
-                _prepare_mailbox(email)
                 register(name, email, password)
                 return login(email, password, persist=True)
             except ValueError as e:

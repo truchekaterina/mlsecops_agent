@@ -65,7 +65,12 @@ def mailbox_exists(email: str) -> bool:
 
 
 def create_mailbox(email: str, password: str) -> dict:
-    status, body = _call("POST", "/api/mailbox", {"email": email, "password": password})
+    status, body = _call(
+        "POST",
+        "/api/internal/mailbox",
+        {"email": email, "password": password},
+        internal=True,
+    )
     if status == 200:
         return body
     raise ValueError(_detail(body, "Не удалось завести почту."))

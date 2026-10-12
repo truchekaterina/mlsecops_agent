@@ -103,19 +103,8 @@
     <p class="sub">Отдельный сервис ящиков. <a href="http://127.0.0.1:8080">Сервис Стража</a></p>
 
     <section id="auth" class="card">
-      <div class="tabs">
-        <button type="button" id="tab-box">Завести почту</button>
-        <button type="button" id="tab-login" class="ghost">Войти в ящик</button>
-      </div>
-      <p class="who">Сначала заведите ящик здесь. В Страже регистрация пройдёт только на уже существующую почту. В ящике видны только ваши письма.</p>
-      <form id="form-box">
-        <label>Почта</label>
-        <input name="email" type="email" autocomplete="email" required />
-        <label>Пароль ящика (от 8 знаков, заглавная, строчная и символ)</label>
-        <input name="password" type="password" autocomplete="new-password" required minlength="8" />
-        <button type="submit">Завести ящик</button>
-      </form>
-      <form id="form-login" class="hidden">
+      <p class="who">Ящик появляется при регистрации в <a href="http://127.0.0.1:8080">Страже</a> на ту же почту. Здесь только вход в уже созданный ящик. У нового ящика пароль тот же, что при регистрации. В ящике видны только ваши письма.</p>
+      <form id="form-login">
         <label>Почта</label>
         <input name="email" type="email" autocomplete="username" required />
         <label>Пароль ящика</label>
@@ -154,17 +143,6 @@
       if (Array.isArray(d)) return d.map((x) => x.msg || JSON.stringify(x)).join("; ");
       return fallback;
     }
-    function showAuthTab(name) {
-      document.getElementById("form-box").classList.toggle("hidden", name !== "box");
-      document.getElementById("form-login").classList.toggle("hidden", name !== "login");
-      document.getElementById("tab-box").classList.toggle("ghost", name !== "box");
-      document.getElementById("tab-login").classList.toggle("ghost", name !== "login");
-      err.textContent = "";
-      ok.textContent = "";
-    }
-    document.getElementById("tab-box").onclick = () => showAuthTab("box");
-    document.getElementById("tab-login").onclick = () => showAuthTab("login");
-
     function renderInbox(items) {
       inboxList.innerHTML = "";
       if (!items || !items.length) {
@@ -223,24 +201,6 @@
       inboxList.innerHTML = "";
       letter.textContent = "Выберите письмо слева.";
     }
-
-    document.getElementById("form-box").onsubmit = async (e) => {
-      e.preventDefault();
-      err.textContent = "";
-      ok.textContent = "";
-      const fd = new FormData(e.target);
-      const r = await fetch("/api/mailbox", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
-      });
-      const data = await r.json();
-      if (!r.ok) { err.textContent = fmtErr(data, "Не удалось завести почту"); return; }
-      const loginEmail = document.querySelector("#form-login input[name=email]");
-      if (loginEmail) loginEmail.value = data.email;
-      showAuthTab("login");
-      ok.textContent = "Ящик " + data.email + " заведён. Войдите в него здесь, а в Страже зарегистрируйтесь на эту почту.";
-    };
 
     document.getElementById("form-login").onsubmit = async (e) => {
       e.preventDefault();

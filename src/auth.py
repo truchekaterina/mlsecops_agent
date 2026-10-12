@@ -76,14 +76,19 @@ def register(name: str, email: str, password: str) -> dict:
     if not name or "@" not in email:
         raise ValueError("Нужны имя и почта с @.")
     password_hash.validate_password(password)
+    store.init()
+    with store.db() as conn:
+        exists = conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone()
+    if exists:
+        raise ValueError("На эту почту уже есть учётка. Войдите.")
     try:
-        exists = mail_client.mailbox_exists(email)
+        if not mail_client.mailbox_exists(email):
+            mail_client.create_mailbox(email, password)
     except mail_client.MailUnavailable as exc:
         raise ValueError(str(exc)) from exc
-    if not exists:
-        raise ValueError(
-            "Такой почты нет. Сначала заведите ящик в почтовом сервисе http://127.0.0.1:8090"
-        )
+    except ValueError as exc:
+        if "уже заведена" not in str(exc):
+            raise
     store.init()
     with store.db() as conn:
         exists = conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone()
