@@ -6,24 +6,25 @@
 
 Агент собран на **LangChain**: `create_agent` (это граф **LangGraph** ReAct). Кнопки — только **MCP**. Чат — в браузере, любой человек регистрируется сам
 
-## Что нужно заранее
+## Запуск всего стенда (Docker)
 
-- Ollama: [https://ollama.com/download](https://ollama.com/download)
-- модель `qwen2.5:3b` (`ollama pull qwen2.5:3b`)
-- Python 3.12 в `.venv`
-- `uv` (для MCP ЦБ): [https://docs.astral.sh/uv/](https://docs.astral.sh/uv/)
-
-Почта поднимается вместе со стендом. В Docker: [http://127.0.0.1:38490](http://127.0.0.1:38490) (хост), внутри контейнера процесс на `8090`. Локальный `start_mode_a.ps1`: [http://127.0.0.1:8090](http://127.0.0.1:8090). Без `STRAZH_MAIL_SECRET` она не стартует: скрипт запуска кладёт случайный секрет в `data/mail_secret` и в репозиторий его не коммитит. Код в `src/`, страницы в `static/`, базы и логи в `data/`. Страницы схемы `/docs`, `/redoc` и `/openapi.json` выключены, пока перед запуском не задан `STRAZH_OPENAPI=1`. Прямые пакеты в `requirements.txt` закреплены через `==`, включая `sqlcipher3==0.6.3`. Сборка ставит `uv==0.13.0` и `atomno-mcp-cbr-rates==0.1.11`. Файлы баз открываются ключом из `data/db_secret`: без `STRAZH_DB_SECRET` не короче 16 символов процесс их не читает.
-
-На этой машине RTX 3050 4 ГБ — GPU **не** используем.
-
-## Запуск сервиса
+Нужен только Docker. Ollama, модель, почта и учебные MCP поднимаются сами.
 
 ```bash
-docker compose up
+./start-docker.sh
 ```
 
-На Windows без Docker: `.\start_mode_a.ps1` из корня репозитория.
+Windows: `.\start-docker.ps1`  
+Без скрипта: `docker compose up -d --build`
+
+- Страж: http://127.0.0.1:38480  
+- Почта: http://127.0.0.1:38490  
+
+Первый раз качает `qwen2.5:3b` (~2 ГБ). Стоп: `docker compose down`. Подробности: [DOCKER.md](DOCKER.md).
+
+Без Docker на Windows: Ollama + `qwen2.5:3b` + Python 3.12 + `uv`, затем `.\start_mode_a.ps1` (порты `8080` / `8090`).
+
+Почта без `STRAZH_MAIL_SECRET` не стартует: контейнер кладёт случайный секрет в том (`mail_secret`), в git его нет. Базы закрыты ключом `db_secret`. Схема API `/docs` выключена, пока не задан `STRAZH_OPENAPI=1`. Пакеты в `requirements.txt` с `==`. GPU не используем.
 
 Откройте [http://127.0.0.1:38480](http://127.0.0.1:38480) (Docker) или [http://127.0.0.1:8080](http://127.0.0.1:8080) (локальный скрипт).
 
