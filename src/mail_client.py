@@ -8,8 +8,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import action_hash
+
 MAIL_URL = os.environ.get("STRAZH_MAIL_URL", "http://127.0.0.1:8090").rstrip("/")
-MAIL_SECRET = os.environ.get("STRAZH_MAIL_SECRET", "strazh-mail-demo")
 
 
 class MailUnavailable(RuntimeError):
@@ -23,7 +24,10 @@ def _call(method: str, path: str, payload: dict | None = None, *, internal: bool
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     if internal:
-        headers["X-Mail-Token"] = MAIL_SECRET
+        try:
+            headers["X-Mail-Token"] = action_hash.mail_secret()
+        except RuntimeError as exc:
+            raise MailUnavailable(str(exc)) from exc
     req = urllib.request.Request(MAIL_URL + path, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=3) as resp:

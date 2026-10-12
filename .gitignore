@@ -13,6 +13,7 @@ mail.db-shm
 data/trades.log
 data/session.json
 data/jwt_secret
+data/mail_secret
 data/ledgers.json
 data/ledgers.json.tmp
 data/users.json

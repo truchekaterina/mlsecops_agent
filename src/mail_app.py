@@ -9,18 +9,18 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import time
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+import action_hash
 import mail_store
 import password_hash
 from paths import STATIC
 
-SECRET = os.environ.get("STRAZH_MAIL_SECRET", "strazh-mail-demo")
+SECRET = action_hash.mail_secret()
 TTL_HOURS = 8
 
 app = FastAPI(title="Почта Стража", version="1")
@@ -113,7 +113,7 @@ async def index():
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": "mail", "db": str(mail_store.DB_PATH)}
+    return {"ok": True}
 
 
 @app.post("/api/mailbox")

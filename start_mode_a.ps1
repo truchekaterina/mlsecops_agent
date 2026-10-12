@@ -27,6 +27,23 @@ if ($existing.Length -lt 16 -or $existing -eq $demoSecret) {
     Set-Content -Path $secretFile -Value $existing -NoNewline -Encoding ascii
 }
 $env:STRAZH_JWT_SECRET = $existing
+$mailSecretFile = Join-Path $dataDir "mail_secret"
+$mailSecret = ""
+if ($env:STRAZH_MAIL_SECRET) { $mailSecret = $env:STRAZH_MAIL_SECRET.Trim() }
+if (-not $mailSecret -and (Test-Path $mailSecretFile)) {
+    $mailSecret = (Get-Content -Raw -Path $mailSecretFile).Trim()
+}
+if (-not $mailSecret) {
+    $mailBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($mailBytes)
+    $mailSecret = [Convert]::ToBase64String($mailBytes)
+    Set-Content -Path $mailSecretFile -Value $mailSecret -NoNewline -Encoding ascii
+}
+if ($mailSecret.Length -lt 16) {
+    Write-Host "STRAZH_MAIL_SECRET короче 16 символов. Почта не стартует."
+    exit 1
+}
+$env:STRAZH_MAIL_SECRET = $mailSecret
 $env:STRAZH_DEMO_USERS = "1"
 
 Start-Process -FilePath $python -ArgumentList @(

@@ -18,7 +18,13 @@ def _strazh_secret() -> str:
 
 
 def mail_secret() -> str:
-    return os.environ.get("STRAZH_MAIL_SECRET", "strazh-mail-demo")
+    value = os.environ.get("STRAZH_MAIL_SECRET", "").strip()
+    if len(value) < 16:
+        raise RuntimeError(
+            "Задайте STRAZH_MAIL_SECRET не короче 16 символов. "
+            "Почта не подставляет секрет из кода."
+        )
+    return value
 
 
 def actor_hash(email: str, *, secret: str | None = None) -> str:

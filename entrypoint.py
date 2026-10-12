@@ -14,6 +14,7 @@ from pathlib import Path
 
 DATA = Path("/app/data")
 SECRET_FILE = DATA / "jwt_secret"
+MAIL_SECRET_FILE = DATA / "mail_secret"
 DEMO_SECRET = "strazh-demo-hs256"
 
 
@@ -23,6 +24,21 @@ def ensure_jwt() -> str:
     if len(existing) < 16 or existing == DEMO_SECRET:
         existing = secrets.token_urlsafe(32)
         SECRET_FILE.write_text(existing, encoding="ascii")
+    return existing
+
+
+def ensure_mail_secret() -> str:
+    """Секрет почты отдельно от JWT. В репозиторий не кладётся."""
+    DATA.mkdir(parents=True, exist_ok=True)
+    current = os.environ.get("STRAZH_MAIL_SECRET", "").strip()
+    if len(current) >= 16:
+        return current
+    if current:
+        raise SystemExit("STRAZH_MAIL_SECRET короче 16 символов. Почта не стартует.")
+    existing = MAIL_SECRET_FILE.read_text(encoding="ascii").strip() if MAIL_SECRET_FILE.exists() else ""
+    if len(existing) < 16:
+        existing = secrets.token_urlsafe(32)
+        MAIL_SECRET_FILE.write_text(existing, encoding="ascii")
     return existing
 
 
@@ -70,6 +86,7 @@ def ensure_model(url: str, model: str) -> None:
 
 def main() -> None:
     os.environ["STRAZH_JWT_SECRET"] = ensure_jwt()
+    os.environ["STRAZH_MAIL_SECRET"] = ensure_mail_secret()
     os.environ.setdefault("STRAZH_DEMO_USERS", "1")
     os.environ.setdefault("STRAZH_MAIL_URL", "http://127.0.0.1:8090")
     ollama = os.environ.get("STRAZH_OLLAMA_URL", "http://127.0.0.1:11434")
@@ -80,6 +97,8 @@ def main() -> None:
     src = Path("/app/src")
     os.chdir(src)
     env = os.environ.copy()
+    # 0.0.0.0 — интерфейсы контейнера, иначе проброс Docker не доходит до почты.
+    # На хосте порт опубликован только как 127.0.0.1:8090.
     mail = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "mail_app:app", "--host", "0.0.0.0", "--port", "8090"],
         cwd=src,
