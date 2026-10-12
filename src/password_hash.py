@@ -1,9 +1,6 @@
-"""Пароль регистрации хранится только хешем. Открытый пароль в базу не пишется."""
+"""Пароль регистрации хранится только хешем Argon2. Открытый пароль в базу не пишется."""
 
 from __future__ import annotations
-
-import hashlib
-import hmac
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -27,24 +24,18 @@ def hash_password(password: str) -> str:
     return _HASHER.hash(password)
 
 
-def _legacy_sha256(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-
 def password_matches(stored: str, password: str) -> bool:
     expected = stored or ""
-    if expected.startswith("$argon2"):
-        try:
-            return _HASHER.verify(expected, password)
-        except VerifyMismatchError:
-            return False
-    if expected and hmac.compare_digest(expected, _legacy_sha256(password)):
-        return True
-    return False
+    if not expected.startswith("$argon2"):
+        return False
+    try:
+        return _HASHER.verify(expected, password)
+    except VerifyMismatchError:
+        return False
 
 
 def needs_rehash(stored: str) -> bool:
     expected = stored or ""
     if not expected.startswith("$argon2"):
-        return bool(expected)
+        return False
     return _HASHER.check_needs_rehash(expected)
