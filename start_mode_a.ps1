@@ -44,6 +44,23 @@ if ($mailSecret.Length -lt 16) {
     exit 1
 }
 $env:STRAZH_MAIL_SECRET = $mailSecret
+$dbSecretFile = Join-Path $dataDir "db_secret"
+$dbSecret = ""
+if ($env:STRAZH_DB_SECRET) { $dbSecret = $env:STRAZH_DB_SECRET.Trim() }
+if (-not $dbSecret -and (Test-Path $dbSecretFile)) {
+    $dbSecret = (Get-Content -Raw -Path $dbSecretFile).Trim()
+}
+if (-not $dbSecret) {
+    $dbBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($dbBytes)
+    $dbSecret = [Convert]::ToBase64String($dbBytes)
+    Set-Content -Path $dbSecretFile -Value $dbSecret -NoNewline -Encoding ascii
+}
+if ($dbSecret.Length -lt 16) {
+    Write-Host "STRAZH_DB_SECRET короче 16 символов. База не стартует."
+    exit 1
+}
+$env:STRAZH_DB_SECRET = $dbSecret
 
 Start-Process -FilePath $python -ArgumentList @(
     "-m", "uvicorn", "mail_app:app", "--host", "127.0.0.1", "--port", "8090"

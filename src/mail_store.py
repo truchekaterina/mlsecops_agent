@@ -1,14 +1,14 @@
-"""База почтового сервиса. Отдельный файл, не strazh.db."""
+"""База почтового сервиса. Отдельный файл, не strazh.db. Тоже закрыт ключом."""
 
 from __future__ import annotations
 
-import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-import password_hash
 import action_hash
+import db_cipher
+import password_hash
 from paths import DATA
 
 DB_PATH = DATA / "mail.db"
@@ -46,9 +46,8 @@ def hash_password(password: str) -> str:
     return password_hash.hash_password(password)
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), timeout=15, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+def connect() -> db_cipher.Connection:
+    conn = db_cipher.connect(DB_PATH)
     conn.execute("PRAGMA busy_timeout=8000")
     return conn
 
@@ -65,6 +64,7 @@ def db():
         raise
     finally:
         conn.close()
+        db_cipher.restrict(DB_PATH)
 
 
 def init() -> None:
@@ -77,16 +77,18 @@ def init() -> None:
         conn = connect()
         try:
             conn.execute("PRAGMA journal_mode=WAL")
+            db_cipher.restrict(DB_PATH)
             conn.executescript(SCHEMA)
             _ensure_action_hash(conn)
             _drop_demo(conn)
             conn.commit()
         finally:
             conn.close()
+            db_cipher.restrict(DB_PATH)
         _ready = True
 
 
-def _ensure_action_hash(conn: sqlite3.Connection) -> None:
+def _ensure_action_hash(conn: db_cipher.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
     if "action_hash" not in cols:
         conn.execute("ALTER TABLE messages ADD COLUMN action_hash TEXT")
@@ -95,7 +97,7 @@ def _ensure_action_hash(conn: sqlite3.Connection) -> None:
 _DEMO_EMAILS = ("client@demo", "katya@demo")
 
 
-def _drop_demo(conn: sqlite3.Connection) -> None:
+def _drop_demo(conn: db_cipher.Connection) -> None:
     keys = list(_DEMO_EMAILS)
     try:
         secret = action_hash.mail_secret()

@@ -15,6 +15,7 @@ from pathlib import Path
 DATA = Path("/app/data")
 SECRET_FILE = DATA / "jwt_secret"
 MAIL_SECRET_FILE = DATA / "mail_secret"
+DB_SECRET_FILE = DATA / "db_secret"
 DEMO_SECRET = "strazh-demo-hs256"
 
 
@@ -24,6 +25,22 @@ def ensure_jwt() -> str:
     if len(existing) < 16 or existing == DEMO_SECRET:
         existing = secrets.token_urlsafe(32)
         SECRET_FILE.write_text(existing, encoding="ascii")
+    return existing
+
+
+def ensure_db_secret() -> str:
+    """Ключ файлов базы отдельно от JWT и от почтового секрета."""
+    DATA.mkdir(parents=True, exist_ok=True)
+    current = os.environ.get("STRAZH_DB_SECRET", "").strip()
+    if len(current) >= 16:
+        return current
+    if current:
+        raise SystemExit("STRAZH_DB_SECRET короче 16 символов. База не стартует.")
+    existing = DB_SECRET_FILE.read_text(encoding="ascii").strip() if DB_SECRET_FILE.exists() else ""
+    if len(existing) < 16:
+        existing = secrets.token_urlsafe(32)
+        DB_SECRET_FILE.write_text(existing, encoding="ascii")
+    os.chmod(DB_SECRET_FILE, 0o600)
     return existing
 
 
@@ -85,8 +102,10 @@ def ensure_model(url: str, model: str) -> None:
 
 
 def main() -> None:
+    os.umask(0o077)
     os.environ["STRAZH_JWT_SECRET"] = ensure_jwt()
     os.environ["STRAZH_MAIL_SECRET"] = ensure_mail_secret()
+    os.environ["STRAZH_DB_SECRET"] = ensure_db_secret()
     os.environ.setdefault("STRAZH_MAIL_URL", "http://127.0.0.1:8090")
     ollama = os.environ.get("STRAZH_OLLAMA_URL", "http://127.0.0.1:11434")
     model = os.environ.get("STRAZH_MODEL", "qwen2.5:3b")

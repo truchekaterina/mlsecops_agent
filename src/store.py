@@ -1,17 +1,17 @@
 """SQLite-учёт стенда: пользователи, счета, сделки, письма.
 
-Один файл strazh.db. WAL, чтобы веб и MCP-процесс писали одновременно.
+Файл strazh.db закрыт ключом. WAL, чтобы веб и MCP-процесс писали одновременно.
 """
 
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+import db_cipher
 from paths import DATA
 
 DB_PATH = DATA / "strazh.db"
@@ -88,7 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_email ON messages(email, id);
 """
 
 
-def _ensure_action_hash(conn: sqlite3.Connection) -> None:
+def _ensure_action_hash(conn: db_cipher.Connection) -> None:
     for table in ("trades", "messages"):
         cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if "action_hash" not in cols:
@@ -99,9 +99,8 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), timeout=15, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+def connect() -> db_cipher.Connection:
+    conn = db_cipher.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=8000")
     return conn
@@ -119,6 +118,7 @@ def db():
         raise
     finally:
         conn.close()
+        db_cipher.restrict(DB_PATH)
 
 
 def init() -> None:
@@ -131,6 +131,7 @@ def init() -> None:
         conn = connect()
         try:
             conn.execute("PRAGMA journal_mode=WAL")
+            db_cipher.restrict(DB_PATH)
             conn.executescript(SCHEMA)
             conn.commit()
             _ensure_action_hash(conn)
@@ -142,6 +143,7 @@ def init() -> None:
             conn.commit()
         finally:
             conn.close()
+            db_cipher.restrict(DB_PATH)
         _ready = True
 
 
@@ -157,7 +159,7 @@ def get_secret() -> str:
         return SECRET_DEFAULT
 
 
-def _migrate_json(conn: sqlite3.Connection) -> None:
+def _migrate_json(conn: db_cipher.Connection) -> None:
     done = conn.execute("SELECT value FROM meta WHERE key='migrated_json'").fetchone()
     if done:
         return
@@ -228,7 +230,7 @@ def _migrate_json(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_turn_gate(conn: sqlite3.Connection) -> None:
+def _ensure_turn_gate(conn: db_cipher.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS turn_gate (
@@ -299,7 +301,7 @@ def claim_trade(email: str) -> bool:
 _DEMO_EMAILS = ("client@demo", "katya@demo")
 
 
-def _drop_demo_accounts(conn: sqlite3.Connection) -> None:
+def _drop_demo_accounts(conn: db_cipher.Connection) -> None:
     """Учебные входы из README больше не живут в базе. Чужие учётки не трогает."""
     keys = list(_DEMO_EMAILS)
     row = conn.execute("SELECT value FROM meta WHERE key='jwt_secret'").fetchone()
@@ -319,7 +321,7 @@ def _drop_demo_accounts(conn: sqlite3.Connection) -> None:
             conn.execute(f"DELETE FROM {table} WHERE email=?", (key,))
 
 
-def _ensure_revoked(conn: sqlite3.Connection) -> None:
+def _ensure_revoked(conn: db_cipher.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS revoked_tokens (
@@ -352,7 +354,7 @@ def token_revoked(jti: str) -> bool:
     return row is not None
 
 
-def _backfill_mailboxes(conn: sqlite3.Connection) -> None:
+def _backfill_mailboxes(conn: db_cipher.Connection) -> None:
     """Старый список в strazh.db. Регистрация и вход его не читают."""
     conn.execute(
         """
