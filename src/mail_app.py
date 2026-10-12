@@ -18,12 +18,13 @@ from pydantic import BaseModel, Field
 import action_hash
 import mail_store
 import password_hash
+from api_schema import fastapi_kwargs
 from paths import STATIC
 
 SECRET = action_hash.mail_secret()
 TTL_HOURS = 8
 
-app = FastAPI(title="Почта Стража", version="1")
+app = FastAPI(title="Почта Стража", version="1", **fastapi_kwargs())
 
 
 class MailboxIn(BaseModel):

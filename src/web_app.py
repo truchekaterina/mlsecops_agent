@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from api_schema import fastapi_kwargs  # noqa: E402
 from paths import STATIC  # noqa: E402
 
 from agent_mode_a import build_agent, last_text, rate_codes, tool_json_payloads, tools_used  # noqa: E402
@@ -59,7 +60,7 @@ from replies import (  # noqa: E402
 
 signing_secret()
 
-app = FastAPI(title="Страж", version="mode-a")
+app = FastAPI(title="Страж", version="mode-a", **fastapi_kwargs())
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 _agents: dict[str, tuple] = {}
