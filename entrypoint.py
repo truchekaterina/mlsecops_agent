@@ -101,6 +101,48 @@ def ensure_model(url: str, model: str) -> None:
     print("Модель готова.", flush=True)
 
 
+def _ensure_attacker_mailbox(mail_url: str, mail_secret: str) -> None:
+    """Учебный ящик злоумышленника: после легенды 2 входящих от Стража быть не должно."""
+    base = mail_url.rstrip("/")
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(base + "/api/health", timeout=2).read()
+            break
+        except (urllib.error.URLError, TimeoutError, OSError):
+            time.sleep(0.5)
+    else:
+        print("Почта не поднялась — ящик attacker@mail.ru не создан.", flush=True)
+        return
+    payload = json.dumps(
+        {"email": "attacker@mail.ru", "password": "AttackerDemo1!"}
+    ).encode()
+    req = urllib.request.Request(
+        base + "/api/internal/mailbox",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Mail-Token": mail_secret,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+        print(
+            "Учебный ящик attacker@mail.ru готов (пароль AttackerDemo1!). "
+            "После легенды 2 входящих от Стража быть не должно.",
+            flush=True,
+        )
+    except urllib.error.HTTPError as exc:
+        # Уже существует — нормально при перезапуске.
+        if exc.code in {400, 409}:
+            print("Ящик attacker@mail.ru уже есть.", flush=True)
+        else:
+            print(f"Не удалось завести attacker@mail.ru: HTTP {exc.code}", flush=True)
+    except urllib.error.URLError as exc:
+        print(f"Не удалось завести attacker@mail.ru: {exc}", flush=True)
+
+
 def main() -> None:
     os.umask(0o077)
     os.environ["STRAZH_JWT_SECRET"] = ensure_jwt()
@@ -116,12 +158,58 @@ def main() -> None:
     os.chdir(src)
     env = os.environ.copy()
     # 0.0.0.0 — интерфейсы контейнера, иначе проброс Docker не доходит до почты.
-    # На хосте порт опубликован только как 127.0.0.1:8090.
+    # На хосте compose публикует 38480→8080 и 38490→8090 на все интерфейсы (LAN).
     mail = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "mail_app:app", "--host", "0.0.0.0", "--port", "8090"],
         cwd=src,
         env=env,
     )
+    mcp_procs: list[subprocess.Popen] = []
+    stub_on = os.environ.get("STRAZH_MCP_STUB", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    teaching_scripts = [
+        (Path("/app/examples/mcp_stub/server.py"), "http://127.0.0.1:9100/mcp", "заглушка"),
+        (
+            Path("/app/examples/evil_mcp/portfolio_backup/server.py"),
+            "http://127.0.0.1:9101/mcp",
+            "легенда 1 backup",
+        ),
+        (
+            Path("/app/examples/evil_mcp/tax_helper/server.py"),
+            "http://127.0.0.1:9102/mcp",
+            "легенда 2 tax",
+        ),
+        (
+            Path("/app/examples/evil_mcp/stock_wiki/server.py"),
+            "http://127.0.0.1:9103/mcp",
+            "легенда 3 wiki",
+        ),
+    ]
+    if stub_on:
+        env["STRAZH_MCP_STUB_URL"] = "http://127.0.0.1:9100/mcp"
+        # Кастомным/учебным MCP не отдаём JWT, ключ БД и почтовый секрет —
+        # иначе легенда 2 (deliver на attacker@) была бы бессмысленна.
+        mcp_env = {
+            key: value
+            for key, value in env.items()
+            if not key.startswith("STRAZH_JWT")
+            and not key.startswith("STRAZH_DB")
+            and key != "STRAZH_MAIL_SECRET"
+        }
+        mcp_env["STRAZH_MAIL_URL"] = env.get("STRAZH_MAIL_URL", "http://127.0.0.1:8090")
+        for script, url, label in teaching_scripts:
+            if not script.is_file():
+                print(f"Учебный MCP не найден ({label}): {script}", flush=True)
+                continue
+            mcp_procs.append(
+                subprocess.Popen([sys.executable, str(script)], cwd="/app", env=mcp_env)
+            )
+            print(f"Учебный MCP ({label}): {url}", flush=True)
+    _ensure_attacker_mailbox(env.get("STRAZH_MAIL_URL", "http://127.0.0.1:8090"), env["STRAZH_MAIL_SECRET"])
     try:
         web = subprocess.run(
             [sys.executable, "-m", "uvicorn", "web_app:app", "--host", "0.0.0.0", "--port", "8080"],
@@ -130,11 +218,14 @@ def main() -> None:
             check=False,
         )
     finally:
-        mail.terminate()
-        try:
-            mail.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            mail.kill()
+        for proc in [*mcp_procs, mail]:
+            if proc is None:
+                continue
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
     raise SystemExit(web.returncode)
 
 

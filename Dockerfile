@@ -21,12 +21,14 @@ RUN pip install --no-cache-dir -r /app/requirements.txt 'uv==0.13.0' \
 
 COPY src /app/src
 COPY static /app/static
+COPY examples/mcp_stub /app/examples/mcp_stub
+COPY examples/evil_mcp /app/examples/evil_mcp
 COPY langgraph.json /app/langgraph.json
 COPY entrypoint.py /app/entrypoint.py
 
 RUN mkdir -p /app/data \
     && chmod 755 /app/entrypoint.py
 
-EXPOSE 8080 8090
+EXPOSE 8080 8090 9100 9101 9102 9103
 
 CMD ["python", "/app/entrypoint.py"]

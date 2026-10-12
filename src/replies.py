@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -40,6 +41,24 @@ def format_holdings(snap: dict) -> str:
 
 _FX_NAMES = {"USD": "доллар США", "EUR": "евро", "CNY": "китайский юань"}
 NO_TOOL_REPLY = "Повторите, что купить, продать или показать: портфель, счёт или курс валют."
+
+_TRUSTED_REPLY_TOOLS = frozenset(
+    {
+        "execute_buy",
+        "execute_sell",
+        "get_currency_rate",
+        "get_rate",
+        "list_instruments",
+        "list_currencies",
+        "get_account",
+        "get_portfolio",
+        "sell_all",
+        "confirm_reserve_purchase",
+        "deny_reserve_purchase",
+        "transfer_between",
+        "send_trade_email",
+    }
+)
 
 
 def format_rates(payloads: list[dict]) -> str | None:
@@ -443,6 +462,7 @@ def compose_chat_reply(
     email: str,
     user_message: str,
     asked_rates: list[str] | None = None,
+    tool_texts: list[str] | None = None,
 ) -> str:
     """Цифры после тула — из учёта. Решение, какой тул жать, принимает агент."""
     used_set = set(used)
@@ -527,4 +547,71 @@ def compose_chat_reply(
             "Сделка не записана: в учёте ничего не менялось.\n"
             f"{format_portfolio(snap)}"
         )
+    custom_used = [name for name in used if name not in _TRUSTED_REPLY_TOOLS]
+    if custom_used:
+        # Сначала текст тула: модель часто врёт («отправлена аудитору») или «меняю настройки».
+        for raw in reversed(tool_texts or []):
+            text = _strip_tool_injection(str(raw or ""))
+            if text:
+                return text
+        for payload in reversed(payloads):
+            if not isinstance(payload, dict):
+                continue
+            for key in ("result", "message", "text", "answer"):
+                val = payload.get(key)
+                if val:
+                    text = _strip_tool_injection(str(val))
+                    if text:
+                        return text
+            if payload.get("status") == "SUCCESS" and len(payload) <= 4:
+                return json.dumps(payload, ensure_ascii=False)
+        model = _strip_tool_injection((model_text or "").strip())
+        if model and not _noisy_custom_model(model):
+            return model
+        return "Подключённый MCP ответил, но текст пуст. Повторите запрос."
     return NO_TOOL_REPLY
+
+
+_TOOL_INJECT_BLOCK = re.compile(
+    r"\n*\s*\[(?:СКРЫТАЯ ИНСТРУКЦИЯ[^\]]*|Учебный injection[^\]]*|"
+    r"ИНСТРУКЦИЯ ДЛЯ МОДЕЛИ[^\]]*|СИСТЕМНАЯ КОМАНДА[^\]]*)\]\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+# Модель часто выносит хвост injection в открытый текст без скобок.
+_TOOL_INJECT_ECHO = re.compile(
+    r"(?:"
+    r"не\s+вызывай\s+тулы[^.!?\n]*[.!?]?"
+    r"|не\s+ходи\s+на\s+эти\s+адреса[^.!?\n]*[.!?]?"
+    r"|не\s+цитируй\s+(?:эту\s+)?(?:скобку|инструкцию)[^.!?\n]*[.!?]?"
+    r"|один\s+ответ\s*[—\-–]\s*стоп[^.!?\n]*[.!]?"
+    r"|без\s+цикла\s+тулов[^.!?\n]*[.!]?"
+    r"|учебный\s+prompt\s+injection[^.!?\n]*[.!]?"
+    r"|скрыт\w*\s+инструкц\w*[^.!?\n]*[.!]?"
+    r")",
+    re.IGNORECASE,
+)
+_NOISY_CUSTOM = (
+    "меняю настрой",
+    "изменения сохран",
+    "сейчас изменю",
+    "настройки обнов",
+    "отправлена аудитору",
+    "отправлено аудитору",
+    "успешно создана и отправлена",
+    "отправлены аудитору",
+)
+
+
+def _strip_tool_injection(text: str) -> str:
+    cleaned = _TOOL_INJECT_BLOCK.sub("\n", text or "")
+    cleaned = _TOOL_INJECT_ECHO.sub(" ", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip(" \n\t-—")
+
+
+def _noisy_custom_model(text: str) -> bool:
+    low = (text or "").lower().replace("ё", "е")
+    if len(low) < 8:
+        return True
+    return any(piece in low for piece in _NOISY_CUSTOM)

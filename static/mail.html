@@ -100,11 +100,22 @@
 <body>
   <div class="wrap">
     <h1>Почта</h1>
-    <p class="sub">Отдельный сервис ящиков. <a href="http://127.0.0.1:8080">Сервис Стража</a></p>
+    <p class="sub">Отдельный сервис ящиков. <a id="link-web-sub" href="#">Сервис Стража</a></p>
 
     <section id="auth" class="card">
-      <p class="who">Ящик появляется при регистрации в <a href="http://127.0.0.1:8080">Страже</a> на ту же почту. Здесь только вход в уже созданный ящик. У нового ящика пароль тот же, что при регистрации. В ящике видны только ваши письма.</p>
-      <form id="form-login">
+      <div class="tabs">
+        <button type="button" id="tab-reg">Регистрация</button>
+        <button type="button" id="tab-login" class="ghost">Вход</button>
+      </div>
+      <p class="who">Сначала заведите ящик здесь. Потом в <a id="link-web-auth" href="#">Страже</a> зарегистрируйтесь на <strong>ту же почту</strong> (пароль Стража может быть другим). В ящике видны только ваши письма о сделках.</p>
+      <form id="form-reg">
+        <label>Почта</label>
+        <input name="email" type="email" autocomplete="email" required />
+        <label>Пароль (от 8 знаков, заглавная, строчная и символ)</label>
+        <input name="password" type="password" autocomplete="new-password" required minlength="8" />
+        <button type="submit">Создать ящик</button>
+      </form>
+      <form id="form-login" class="hidden">
         <label>Почта</label>
         <input name="email" type="email" autocomplete="username" required />
         <label>Пароль ящика</label>
@@ -135,6 +146,11 @@
     const letter = document.getElementById("letter");
     const err = document.getElementById("auth-err");
     const ok = document.getElementById("auth-ok");
+    const WEB_BY_MAIL = { "38490": "38480", "8090": "8080" };
+    const mailPort = location.port || (location.protocol === "https:" ? "443" : "80");
+    const webHref = location.protocol + "//" + location.hostname + ":" + (WEB_BY_MAIL[mailPort] || "38480");
+    document.getElementById("link-web-sub").href = webHref;
+    document.getElementById("link-web-auth").href = webHref;
     let token = localStorage.getItem("mail_token") || "";
 
     function fmtErr(data, fallback) {
@@ -201,6 +217,35 @@
       inboxList.innerHTML = "";
       letter.textContent = "Выберите письмо слева.";
     }
+
+    function showAuthTab(name) {
+      document.getElementById("form-reg").classList.toggle("hidden", name !== "reg");
+      document.getElementById("form-login").classList.toggle("hidden", name !== "login");
+      document.getElementById("tab-reg").classList.toggle("ghost", name !== "reg");
+      document.getElementById("tab-login").classList.toggle("ghost", name !== "login");
+      err.textContent = "";
+      ok.textContent = "";
+    }
+    document.getElementById("tab-reg").onclick = () => showAuthTab("reg");
+    document.getElementById("tab-login").onclick = () => showAuthTab("login");
+
+    document.getElementById("form-reg").onsubmit = async (e) => {
+      e.preventDefault();
+      err.textContent = "";
+      ok.textContent = "";
+      const fd = new FormData(e.target);
+      const r = await fetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
+      });
+      const data = await r.json();
+      if (!r.ok) { err.textContent = fmtErr(data, "Не удалось создать ящик"); return; }
+      token = data.token;
+      localStorage.setItem("mail_token", token);
+      ok.textContent = "Ящик создан. Дальше зарегистрируйтесь в Страже на ту же почту (пароль можно другой).";
+      showMail(data.email);
+    };
 
     document.getElementById("form-login").onsubmit = async (e) => {
       e.preventDefault();

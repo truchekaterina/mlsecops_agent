@@ -23,8 +23,31 @@ from paths import STATIC
 
 SECRET = action_hash.mail_secret()
 TTL_HOURS = 8
+_LOGIN_FAILS: dict[str, list[float]] = {}
+_LOGIN_WINDOW = 60.0
+_LOGIN_LIMIT = 8
 
 app = FastAPI(title="Почта Стража", version="1", **fastapi_kwargs())
+
+
+def _client_ip(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _reg_locked(ip: str) -> bool:
+    now = time.monotonic()
+    hits = [stamp for stamp in _LOGIN_FAILS.get(ip, []) if now - stamp < _LOGIN_WINDOW]
+    _LOGIN_FAILS[ip] = hits
+    return len(hits) >= _LOGIN_LIMIT
+
+
+def _reg_hit(ip: str) -> None:
+    now = time.monotonic()
+    hits = [stamp for stamp in _LOGIN_FAILS.get(ip, []) if now - stamp < _LOGIN_WINDOW]
+    hits.append(now)
+    _LOGIN_FAILS[ip] = hits[-_LOGIN_LIMIT:]
 
 
 class MailboxIn(BaseModel):
@@ -117,12 +140,34 @@ async def health():
     return {"ok": True}
 
 
+@app.post("/api/register")
+async def api_register(body: MailboxIn, request: Request):
+    """Открытая регистрация ящика. Учётка Стража создаётся отдельно."""
+    ip = _client_ip(request)
+    if _reg_locked(ip):
+        raise HTTPException(429, "Слишком много попыток. Подождите минуту.")
+    try:
+        created = mail_store.create_mailbox(body.email, body.password)
+    except ValueError as exc:
+        _reg_hit(ip)
+        raise HTTPException(400, str(exc)) from exc
+    token = _issue(created["email"])
+    resp = JSONResponse({"email": created["email"], "token": token})
+    resp.set_cookie("mail_token", token, httponly=True, samesite="lax", max_age=TTL_HOURS * 3600)
+    return resp
+
+
 @app.post("/api/login")
-async def api_login(body: LoginIn):
+async def api_login(body: LoginIn, request: Request):
+    ip = _client_ip(request)
+    if _reg_locked(ip):
+        raise HTTPException(429, "Слишком много попыток. Подождите минуту.")
     box = mail_store.find_mailbox(body.email)
     if box is None:
-        raise HTTPException(401, "Такого ящика нет. Он появляется при регистрации в Страже.")
+        _reg_hit(ip)
+        raise HTTPException(401, "Такого ящика нет. Сначала зарегистрируйте почту.")
     if not password_hash.password_matches(box["password_sha256"], body.password):
+        _reg_hit(ip)
         raise HTTPException(401, "Неверный пароль ящика")
     if password_hash.needs_rehash(box["password_sha256"]):
         with mail_store.db() as conn:
@@ -166,6 +211,7 @@ async def api_inbox_one(message_id: int, request: Request):
 
 @app.post("/api/internal/mailbox")
 async def api_internal_mailbox(body: MailboxIn, request: Request):
+    """Служебное создание ящика. Обычная регистрация — POST /api/register."""
     _internal(request)
     try:
         return mail_store.create_mailbox(body.email, body.password)
@@ -177,6 +223,17 @@ async def api_internal_mailbox(body: MailboxIn, request: Request):
 async def api_exists(email: str, request: Request):
     _internal(request)
     return {"email": email.strip().lower(), "exists": mail_store.mailbox_exists(email)}
+
+
+@app.post("/api/internal/check")
+async def api_internal_check(body: LoginIn, request: Request):
+    """Страж проверяет пароль ящика при своей регистрации."""
+    _internal(request)
+    box = mail_store.find_mailbox(body.email)
+    if box is None:
+        return {"ok": False, "exists": False}
+    ok = password_hash.password_matches(box["password_sha256"], body.password)
+    return {"ok": ok, "exists": True}
 
 
 @app.post("/api/internal/deliver")

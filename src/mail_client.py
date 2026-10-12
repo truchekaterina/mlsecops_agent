@@ -76,6 +76,19 @@ def create_mailbox(email: str, password: str) -> dict:
     raise ValueError(_detail(body, "Не удалось завести почту."))
 
 
+def mailbox_password_ok(email: str, password: str) -> bool:
+    """Пароль совпал с ящиком. Для регистрации Стража на уже существующую почту."""
+    status, body = _call(
+        "POST",
+        "/api/internal/check",
+        {"email": email, "password": password},
+        internal=True,
+    )
+    if status != 200:
+        raise MailUnavailable(_detail(body, "Почтовый сервис не ответил."))
+    return bool(body.get("ok"))
+
+
 def deliver(
     *,
     email: str,

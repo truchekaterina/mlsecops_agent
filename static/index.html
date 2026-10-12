@@ -84,10 +84,106 @@
     #composer button { margin-top: 0; }
     .who { color: var(--muted); font-size: 0.9rem; }
     a { color: var(--acc); }
+    a.btn-link {
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      height: 38px;
+      padding: 0 16px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.9rem;
+      font-family: inherit;
+      text-decoration: none;
+      line-height: 1;
+      cursor: pointer;
+    }
+    a.btn-link:hover {
+      color: var(--text);
+      border-color: #3a4a5c;
+    }
     #ask-box { margin-top: 10px; }
     #ask-box button { margin-top: 0; }
     button.ok { background: var(--ok); }
     .okmsg { color: var(--ok); min-height: 1.2em; margin-top: 8px; }
+    #mcp-panel { margin-top: 8px; }
+    #mcp-panel .hint { color: var(--muted); font-size: 0.82rem; margin: 0 0 14px; }
+    #mcp-panel h3 {
+      font-size: 0.95rem;
+      margin: 16px 0 8px;
+      font-weight: 600;
+    }
+    #mcp-panel h3:first-of-type { margin-top: 0; }
+    #mcp-list { margin: 0 0 8px; padding: 0; list-style: none; }
+    #mcp-list > li {
+      display: block;
+      padding: 12px;
+      margin-bottom: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #12181f;
+      font-size: 0.9rem;
+    }
+    #mcp-list .mcp-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+    #mcp-list .meta { color: var(--muted); font-size: 0.8rem; word-break: break-all; margin-top: 4px; }
+    #mcp-list .cmds {
+      margin: 10px 0 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0.85rem;
+    }
+    #mcp-list .cmds li {
+      margin: 6px 0;
+      padding: 6px 8px;
+      border-radius: 6px;
+      background: #0f1419;
+      border: 1px solid var(--line);
+    }
+    #mcp-list .cmds code {
+      color: var(--acc);
+      font-size: 0.85rem;
+    }
+    #mcp-list .cmds .desc { color: var(--muted); display: block; margin-top: 2px; }
+    #mcp-list .cmds-loading { color: var(--muted); font-size: 0.8rem; margin-top: 8px; }
+    #mcp-form label { margin-top: 8px; }
+    #mcp-form button { margin-top: 12px; }
+    #mcp-form .row-inline { display: flex; gap: 8px; flex-wrap: wrap; }
+    #mcp-form .row-inline > * { flex: 1; min-width: 140px; }
+    #btn-mcp.active-mcp {
+      background: var(--acc);
+      color: #041018;
+      border-color: var(--acc);
+    }
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-left: auto;
+    }
+    .header-actions > button.ghost,
+    .header-actions > button.ghost.active-mcp {
+      box-sizing: border-box;
+      margin: 0;
+      height: 38px;
+      padding: 0 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+      line-height: 1;
+    }
   </style>
 </head>
 <body>
@@ -103,14 +199,14 @@
         <button type="button" id="tab-reg">Регистрация</button>
         <button type="button" id="tab-login" class="ghost">Вход</button>
       </div>
-      <p class="who">Регистрация заводит ящик на ту же почту. Письма читаются в <a href="http://127.0.0.1:8090" target="_blank" rel="noopener">почтовом сервисе</a>, пароль у нового ящика тот же.</p>
+      <p class="who">Сначала ящик в <a id="link-mail-auth" href="#" target="_blank" rel="noopener">почтовом сервисе</a>, потом регистрация здесь на <strong>ту же почту</strong>. Пароль Стража может отличаться от пароля ящика.</p>
 
       <form id="form-reg">
         <label>Имя</label>
         <input name="name" autocomplete="name" required />
-        <label>Почта</label>
+        <label>Почта (уже зарегистрированная на почте)</label>
         <input name="email" type="email" autocomplete="email" required />
-        <label>Пароль (от 8 знаков, заглавная, строчная и символ)</label>
+        <label>Пароль Стража (от 8 знаков, заглавная, строчная и символ)</label>
         <input name="password" type="password" autocomplete="new-password" required minlength="8" />
         <button type="submit">Создать учётку и открыть чат</button>
       </form>
@@ -132,21 +228,58 @@
           <div class="who" id="who"></div>
           <div class="who" id="bal"></div>
         </div>
-        <a href="http://127.0.0.1:8090" target="_blank" rel="noopener">Почта</a>
-        <button type="button" class="ghost" id="btn-out">Выйти</button>
-      </div>
-      <div id="chat-log"></div>
-      <div id="ask-box" class="hidden">
-        <div class="who" id="ask-text"></div>
-        <div class="row">
-          <button type="button" class="ok" id="btn-yes">Да, снять с резерва</button>
-          <button type="button" class="ghost" id="btn-no">Нет, отмена</button>
+        <div class="header-actions">
+          <a id="link-mail-chat" class="btn-link" href="#" target="_blank" rel="noopener" title="Открыть почтовый сервис">Почта</a>
+          <button type="button" class="ghost" id="btn-mcp" title="Управление своими MCP">Мои MCP</button>
+          <button type="button" class="ghost" id="btn-out" title="Выйти из учётки Стража">Выйти</button>
         </div>
       </div>
-      <form id="composer">
-        <input id="q" placeholder="Например: Купи 1 акцию Сбербанка" autocomplete="off" />
-        <button type="submit">Отправить</button>
-      </form>
+
+      <div id="chat-main">
+        <div id="chat-log"></div>
+        <div id="ask-box" class="hidden">
+          <div class="who" id="ask-text"></div>
+          <div class="row">
+            <button type="button" class="ok" id="btn-yes">Да, снять с резерва</button>
+            <button type="button" class="ghost" id="btn-no">Нет, отмена</button>
+          </div>
+        </div>
+        <form id="composer">
+          <input id="q" placeholder="Например: Купи 1 акцию Сбербанка" autocomplete="off" />
+          <button type="submit">Отправить</button>
+        </form>
+      </div>
+
+      <div id="mcp-panel" class="hidden">
+        <p class="hint" id="mcp-hint">
+          MCP виден только в вашем чате. Чужой localhost запрещён (анти-SSRF), кроме
+          учебных портов <code>9100–9103</code> (путь <code>/mcp</code>).
+          Transport: <code>streamable_http</code>.
+          Чтобы вернуться в чат — <strong>«← К чату»</strong> (не «Выйти»).
+        </p>
+        <h3>Учебные MCP (уже в контейнере):</h3>
+        <ul id="mcp-teaching" class="cmds"></ul>
+        <h3>Подключённые MCP:</h3>
+        <ul id="mcp-list"></ul>
+        <h3>Подключить новый</h3>
+        <form id="mcp-form">
+          <div class="row-inline">
+            <div>
+              <label for="mcp-name">Имя</label>
+              <input id="mcp-name" name="name" maxlength="40" placeholder="hello" required />
+            </div>
+            <div>
+              <label for="mcp-transport">Transport</label>
+              <input id="mcp-transport" name="transport" value="streamable_http" maxlength="32" />
+            </div>
+          </div>
+          <label for="mcp-url">URL</label>
+          <input id="mcp-url" name="url" placeholder="http://127.0.0.1:9100/mcp" required />
+          <button type="submit">Подключить</button>
+        </form>
+        <div class="err" id="mcp-err"></div>
+        <div class="okmsg" id="mcp-ok"></div>
+      </div>
     </section>
   </div>
   <script>
@@ -157,7 +290,13 @@
     const log = document.getElementById("chat-log");
     const err = document.getElementById("auth-err");
     const ok = document.getElementById("auth-ok");
-    const HINT = "Можно: список акций, состояние счёта, какие куплены, курс валют ЦБ, купить/продать.";
+    const HINT = "Можно: список акций, состояние счёта, какие куплены, курс валют ЦБ, купить/продать. Свой MCP — кнопка «Мои MCP».";
+    // Docker: 38480↔38490. Локальный скрипт: 8080↔8090. Хост берём из адресной строки.
+    const MAIL_BY_WEB = { "38480": "38490", "8080": "8090" };
+    const webPort = location.port || (location.protocol === "https:" ? "443" : "80");
+    const mailHref = location.protocol + "//" + location.hostname + ":" + (MAIL_BY_WEB[webPort] || "38490");
+    document.getElementById("link-mail-auth").href = mailHref;
+    document.getElementById("link-mail-chat").href = mailHref;
     let chatBusy = false;
     function setChatBusy(on) {
       chatBusy = on;
@@ -182,15 +321,181 @@
       const pos = (acc.positions || []).map((p) => p.ticker + " " + p.shares + " шт.").join(", ") || "бумаг нет";
       return "Основной: " + acc.cash_usd + " ₽ · Резерв: " + acc.reserve_usd + " ₽ · " + pos;
     }
+    let mcpViewOpen = false;
+
+    function setMcpView(open) {
+      mcpViewOpen = !!open;
+      const panel = document.getElementById("mcp-panel");
+      const main = document.getElementById("chat-main");
+      const btn = document.getElementById("btn-mcp");
+      panel.classList.toggle("hidden", !mcpViewOpen);
+      main.classList.toggle("hidden", mcpViewOpen);
+      btn.classList.toggle("active-mcp", mcpViewOpen);
+      btn.textContent = mcpViewOpen ? "← К чату" : "Мои MCP";
+      btn.title = mcpViewOpen ? "Вернуться в чат" : "Управление своими MCP";
+      if (mcpViewOpen) {
+        document.getElementById("mcp-err").textContent = "";
+        loadMcpList();
+      }
+    }
+
     function showChat(user) {
       resetChat();
       authBox.classList.add("hidden");
       chatBox.classList.remove("hidden");
       who.textContent = "Вы вошли: " + user.name + " <" + user.email + ">. Уведомления — в почтовом сервисе.";
       bal.textContent = fmtAcc(user.account);
+      document.getElementById("mcp-err").textContent = "";
+      document.getElementById("mcp-ok").textContent = "";
+      setMcpView(false);
       refreshAcc();
       showAsk(user.account && user.account.pending_reserve);
     }
+
+    async function fillMcpCommands(li, name) {
+      const box = document.createElement("div");
+      box.className = "cmds-loading";
+      box.textContent = "Загрузка команд…";
+      li.appendChild(box);
+      const r = await api("/api/mcp/" + encodeURIComponent(name) + "/tools");
+      const data = await r.json().catch(() => ({}));
+      box.remove();
+      if (!r.ok) {
+        const err = document.createElement("div");
+        err.className = "cmds-loading";
+        err.textContent = fmtErr(data, "Команды недоступны (сервер MCP не отвечает).");
+        li.appendChild(err);
+        return;
+      }
+      const tools = data.tools || [];
+      if (!tools.length) {
+        const empty = document.createElement("div");
+        empty.className = "cmds-loading";
+        empty.textContent = "У этого MCP нет тулов.";
+        li.appendChild(empty);
+        return;
+      }
+      const title = document.createElement("div");
+      title.className = "cmds-loading";
+      title.textContent = "Команды (напишите в чат):";
+      li.appendChild(title);
+      const ul = document.createElement("ul");
+      ul.className = "cmds";
+      for (const t of tools) {
+        const row = document.createElement("li");
+        const ex = document.createElement("code");
+        ex.textContent = t.example || ("вызови " + t.name);
+        const desc = document.createElement("span");
+        desc.className = "desc";
+        desc.textContent = t.description || t.name;
+        row.appendChild(ex);
+        row.appendChild(desc);
+        ul.appendChild(row);
+      }
+      li.appendChild(ul);
+    }
+
+    async function loadMcpList() {
+      const list = document.getElementById("mcp-list");
+      list.innerHTML = "";
+      const r = await api("/api/mcp");
+      if (!r.ok) return;
+      const data = await r.json();
+      const teach = document.getElementById("mcp-teaching");
+      if (teach) {
+        teach.innerHTML = "";
+        for (const row of data.teaching || []) {
+          const li = document.createElement("li");
+          const code = document.createElement("code");
+          code.textContent = row.url || "";
+          const desc = document.createElement("span");
+          desc.className = "desc";
+          desc.textContent = (row.title || row.name || "") + " · имя в форме: " + (row.name || "");
+          li.appendChild(code);
+          li.appendChild(desc);
+          teach.appendChild(li);
+        }
+        if (!(data.teaching || []).length) {
+          teach.innerHTML = "<li><span class=\"desc\">Каталог учебных MCP пуст.</span></li>";
+        }
+      }
+      if (data.stub_url) {
+        const urlInput = document.getElementById("mcp-url");
+        if (urlInput && !urlInput.value) urlInput.placeholder = data.stub_url;
+      }
+      const items = data.items || [];
+      if (!items.length) {
+        const empty = document.createElement("li");
+        empty.innerHTML = "<div class=\"meta\">Пока нет подключённых MCP. Подключите встроенную заглушку URL выше.</div>";
+        list.appendChild(empty);
+        return;
+      }
+      for (const item of items) {
+        const li = document.createElement("li");
+        const head = document.createElement("div");
+        head.className = "mcp-head";
+        const left = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = item.name + " · " + (item.status || "");
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = (item.transport || "") + " · " + (item.url || "");
+        left.appendChild(title);
+        left.appendChild(meta);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "ghost";
+        btn.textContent = "Отключить";
+        btn.onclick = () => removeMcp(item.name);
+        head.appendChild(left);
+        head.appendChild(btn);
+        li.appendChild(head);
+        list.appendChild(li);
+        fillMcpCommands(li, item.name);
+      }
+    }
+
+    async function removeMcp(name) {
+      document.getElementById("mcp-err").textContent = "";
+      document.getElementById("mcp-ok").textContent = "";
+      const r = await api("/api/mcp/" + encodeURIComponent(name), { method: "DELETE" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById("mcp-err").textContent = fmtErr(data, "Не удалось отключить");
+        return;
+      }
+      document.getElementById("mcp-ok").textContent = "MCP отключён. Можно вернуться в чат кнопкой «← К чату».";
+      loadMcpList();
+    }
+
+    document.getElementById("btn-mcp").onclick = () => {
+      setMcpView(!mcpViewOpen);
+    };
+
+    document.getElementById("mcp-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const errEl = document.getElementById("mcp-err");
+      const okEl = document.getElementById("mcp-ok");
+      errEl.textContent = "";
+      okEl.textContent = "";
+      const name = document.getElementById("mcp-name").value.trim();
+      const url = document.getElementById("mcp-url").value.trim();
+      const transport = document.getElementById("mcp-transport").value.trim() || "streamable_http";
+      const r = await api("/api/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, url, transport }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        errEl.textContent = fmtErr(data, "Не удалось подключить MCP");
+        return;
+      }
+      okEl.textContent = "MCP подключён. Команды ниже — затем «← К чату» и напишите, например: «вызови ping».";
+      document.getElementById("mcp-name").value = "";
+      document.getElementById("mcp-url").value = "";
+      loadMcpList();
+    };
     function api(url, options) {
       const opts = options ? { ...options } : {};
       opts.credentials = "same-origin";
@@ -205,6 +510,7 @@
     function showAuth() {
       resetChat();
       chatBox.classList.add("hidden");
+      setMcpView(false);
       authBox.classList.remove("hidden");
     }
     function addMsg(cls, text) {

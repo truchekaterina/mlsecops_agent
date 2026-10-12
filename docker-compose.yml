@@ -20,11 +20,14 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "8080:8080"
-      - "127.0.0.1:8090:8090"
+      # Нестандартные порты на всех интерфейсах хоста — показ в одной Wi‑Fi сети.
+      # Внутри контейнера процессы по-прежнему на 8080 и 8090.
+      - "38480:8080"
+      - "38490:8090"
     environment:
       STRAZH_OLLAMA_URL: http://ollama:11434
       STRAZH_MODEL: qwen2.5:3b
+      # Связь веб→почта внутри контейнера, не адрес для браузера одногруппников.
       STRAZH_MAIL_URL: http://127.0.0.1:8090
     depends_on:
       ollama:

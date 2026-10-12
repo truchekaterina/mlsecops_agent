@@ -71,6 +71,7 @@ def find_user(store_snap: dict | None, login: str) -> dict | None:
 
 
 def register(name: str, email: str, password: str) -> dict:
+    """Учётка Стража только на уже существующий ящик. Ящик создаёт страница почты."""
     name = policy.clean_name(name)
     email = email.strip().lower()
     if not name or "@" not in email:
@@ -83,12 +84,12 @@ def register(name: str, email: str, password: str) -> dict:
         raise ValueError("На эту почту уже есть учётка. Войдите.")
     try:
         if not mail_client.mailbox_exists(email):
-            mail_client.create_mailbox(email, password)
+            raise ValueError(
+                "Сначала создайте ящик на странице почты. "
+                "Регистрация в Страже — на ту же почту; пароль Стража может быть другим."
+            )
     except mail_client.MailUnavailable as exc:
         raise ValueError(str(exc)) from exc
-    except ValueError as exc:
-        if "уже заведена" not in str(exc):
-            raise
     store.init()
     with store.db() as conn:
         exists = conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone()

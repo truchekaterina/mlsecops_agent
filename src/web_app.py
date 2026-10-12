@@ -24,14 +24,24 @@ from pydantic import BaseModel, Field
 from api_schema import fastapi_kwargs  # noqa: E402
 from paths import STATIC  # noqa: E402
 
-from agent_mode_a import build_agent, last_text, rate_codes, tool_json_payloads, tools_used  # noqa: E402
+from agent_mode_a import (  # noqa: E402
+    build_agent,
+    last_text,
+    rate_codes,
+    tool_json_payloads,
+    tool_plain_texts,
+    tools_used,
+)
 from auth import LOGIN_FAIL, TTL_HOURS, login, register, session_from_token, signing_secret  # noqa: E402
 from ledger import snapshot  # noqa: E402
 from store import open_turn, revoke_token  # noqa: E402
+import user_mcp  # noqa: E402
 from mcp_strazh import (  # noqa: E402
     _log,
     confirm_ticket,
     deny_ticket,
+    execute_buy,
+    execute_sell,
     propose_sell_all,
     propose_transfer,
     set_client,
@@ -44,12 +54,18 @@ from policy import (  # noqa: E402
     model_intent,
     parse_order,
     parse_transfer,
+    parse_custom_invoke,
+    prefers_custom_mcp,
+    prefers_tax_mcp,
+    prefers_wiki_mcp,
+    wiki_ticker,
     recover_layout,
     several_companies,
     story_block,
     utterance_class,
 )
 from replies import (  # noqa: E402
+    NO_TOOL_REPLY,
     OTHER_USER_REPLY,
     asks_about_other_user,
     compose_chat_reply,
@@ -96,6 +112,12 @@ class TicketIn(BaseModel):
     id: str = Field(min_length=4, max_length=40)
 
 
+class McpIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    url: str = Field(min_length=8, max_length=500)
+    transport: str = Field(default="streamable_http", max_length=32)
+
+
 async def _hold_user(email: str) -> asyncio.Lock:
     """Один активный запрос на пользователя: второй ждёт, пока первый не закончится."""
     async with _user_locks_guard:
@@ -104,6 +126,73 @@ async def _hold_user(email: str) -> asyncio.Lock:
             lock = asyncio.Lock()
             _user_locks[email] = lock
         return lock
+
+
+def _flatten_tool_out(raw: object) -> str:
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):
+        parts = []
+        for item in raw:
+            if isinstance(item, dict) and item.get("text") is not None:
+                parts.append(str(item["text"]))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(raw or "")
+
+
+def _args_for_custom_tool(name: str, rest: str, session: dict, user_text: str) -> dict:
+    key = (name or "").strip()
+    extra = (rest or "").strip()
+    if key == "company_card":
+        ticker = extra.split()[0] if extra else wiki_ticker(user_text)
+        return {"ticker": ticker}
+    if key == "echo":
+        return {"text": extra or "привет"}
+    if key == "build_tax_declaration":
+        book = snapshot(session["email"])
+        return {
+            "client_email": session["email"],
+            "cash_rub": str(book.get("cash_usd", 0)),
+            "reserve_rub": str(book.get("reserve_usd", 0)),
+            "forward_to_auditor": True,
+        }
+    return {}
+
+
+async def _direct_custom_reply(session: dict, text: str, tools: list) -> dict | None:
+    """Явный «вызови тул» / карточка вики — без модели (qwen часто пропускает вызов)."""
+    names = {str(getattr(tool, "name", "") or "") for tool in tools}
+    parsed = parse_custom_invoke(text)
+    tool_name = ""
+    rest = ""
+    if parsed:
+        tool_name, rest = parsed
+    elif prefers_wiki_mcp(text) and "company_card" in names:
+        tool_name, rest = "company_card", wiki_ticker(text)
+    if not tool_name or tool_name not in names:
+        return None
+    target = next(tool for tool in tools if str(getattr(tool, "name", "") or "") == tool_name)
+    args = _args_for_custom_tool(tool_name, rest, session, text)
+    try:
+        raw = await asyncio.wait_for(target.ainvoke(args), timeout=30)
+    except Exception as exc:
+        return _note(session, f"Тул {tool_name} не ответил: {type(exc).__name__}.")
+    used = [tool_name]
+    answer = compose_chat_reply(
+        model_text="",
+        used=used,
+        payloads=[],
+        snap=snapshot(session["email"]),
+        email=session["email"],
+        user_message=text,
+        tool_texts=[_flatten_tool_out(raw)],
+    )
+    hist = _history.setdefault(session["email"], [])
+    if len(hist) > 40:
+        del hist[:-40]
+    return _pack(session, answer, used)
 
 
 def _bind_client(session: dict) -> None:
@@ -257,6 +346,7 @@ async def api_logout(request: Request):
     if token:
         try:
             session = session_from_token(token)
+            await _drop_agent(session["email"])
             revoke_token(session["jti"], session["exp"])
         except (ValueError, RuntimeError):
             pass
@@ -265,12 +355,74 @@ async def api_logout(request: Request):
     return resp
 
 
+@app.get("/api/mcp")
+async def api_mcp_list(request: Request):
+    from mcp_url_guard import builtin_stub_url, teaching_mcp_catalog
+
+    session = _bearer(request)
+    return {
+        "items": user_mcp.list_mcp(session["email"]),
+        "stub_url": builtin_stub_url(),
+        "stub_hint": "Учебные MCP на :9100–:9103 (stub + 3 легенды). Transport: streamable_http.",
+        "teaching": teaching_mcp_catalog(),
+    }
+
+
+@app.post("/api/mcp")
+async def api_mcp_add(body: McpIn, request: Request):
+    session = _bearer(request)
+    try:
+        item = user_mcp.add_mcp(session["email"], body.name, body.url, body.transport)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await _drop_agent(session["email"])
+    return item
+
+
+@app.delete("/api/mcp/{name}")
+async def api_mcp_delete(name: str, request: Request):
+    session = _bearer(request)
+    try:
+        user_mcp.remove_mcp(session["email"], name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    await _drop_agent(session["email"])
+    return {"ok": True}
+
+
+@app.get("/api/mcp/{name}/tools")
+async def api_mcp_tools(name: str, request: Request):
+    """Команды подключённого MCP (имя + короткое описание) для подсказки в UI."""
+    from mcp_tools_probe import list_remote_tools
+
+    session = _bearer(request)
+    row = user_mcp.get_mcp(session["email"], name)
+    if not row:
+        raise HTTPException(404, "Такого MCP нет.")
+    try:
+        tools = await list_remote_tools(str(row["url"]), str(row.get("transport") or "streamable_http"))
+    except ValueError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            502,
+            f"Не удалось получить тулы MCP «{name}». Проверьте, что сервер запущен.",
+        ) from exc
+    return {"name": row["name"], "tools": tools}
+
+
+async def _drop_agent(email: str) -> None:
+    key = (email or "").strip().lower()
+    async with _lock:
+        _agents.pop(key, None)
+
+
 async def _agent_for(session: dict):
     key = session["email"]
     async with _lock:
         if key not in _agents:
-            agent, tools, client = await build_agent(session)
-            _agents[key] = (agent, tools, client)
+            agent, tools, client, meta = await build_agent(session)
+            _agents[key] = (agent, tools, client, meta)
             _history.setdefault(key, [])
         return _agents[key]
 
@@ -345,23 +497,102 @@ async def _chat_locked(session: dict, body: ChatIn):
     if several:
         return _note(session, several)
     intent = model_intent(text)
-    if intent is None:
+    # «echo: купи Сбер» / «вызови ping» — к кастомному MCP, не в execute_buy.
+    if user_mcp.has_allowed(session["email"]) and prefers_custom_mcp(text):
+        intent = None
+    if intent is None and not user_mcp.has_allowed(session["email"]):
         return _note(session, OFF_TOPIC_REPLY)
     if intent in {"buy", "sell"}:
         order = parse_order(text)
         if order.get("error"):
             return _note(session, str(order["error"]))
-    mixed = _open_money_turn(session, text)
-    if mixed:
-        return _note(session, mixed)
+        mixed = _open_money_turn(session, text)
+        if mixed:
+            return _note(session, mixed)
+    # Покупку и продажу выполняет сервер по разобранной фразе.
+    # Маленькая qwen2.5:3b часто отвечает без execute_buy — тогда был бы NO_TOOL_REPLY.
+    if intent in {"buy", "sell"}:
+        order = parse_order(text)
+        ticker = str(order["ticker"])
+        shares = order.get("shares")
+        if intent == "buy":
+            raw = execute_buy(ticker, int(shares or 1))
+            used = ["execute_buy"]
+        else:
+            qty = int(shares) if shares is not None else 1
+            raw = execute_sell(ticker, qty)
+            used = ["execute_sell"]
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            payload = {"status": "ERROR", "error": "Некорректный ответ инструмента."}
+        if not isinstance(payload, dict):
+            payload = {"status": "ERROR", "error": "Некорректный ответ инструмента."}
+        payload = dict(payload)
+        payload["_tool"] = used[0]
+        answer = compose_chat_reply(
+            model_text="",
+            used=used,
+            payloads=[payload],
+            snap=snapshot(session["email"]),
+            email=session["email"],
+            user_message=text,
+        )
+        if len(hist) > 40:
+            del hist[:-40]
+        return _pack(session, answer, used)
+    if user_mcp.has_allowed(session["email"]) and (
+        parse_custom_invoke(text) or prefers_wiki_mcp(text)
+    ):
+        _agent, tools, _client, meta = await _agent_for(session)
+        failed = list((meta or {}).get("custom_failed") or [])
+        custom_tools = list((meta or {}).get("custom_tools") or [])
+        if not custom_tools and failed:
+            return _note(
+                session,
+                "Кастомный MCP в профиле есть, но сейчас недоступен: "
+                + "; ".join(failed[:3])
+                + ". Проверьте, что сервер запущен, и URL (не localhost).",
+            )
+        direct = await _direct_custom_reply(session, text, tools)
+        if direct is not None:
+            return direct
     if _chat_limited(session["email"]):
         return _note(session, "Слишком много запросов к модели. Подождите минуту.")
     _chat_used(session["email"])
-    agent, _tools, _client = await _agent_for(session)
+    agent, _tools, _client, meta = await _agent_for(session)
+    failed = list((meta or {}).get("custom_failed") or [])
+    custom_tools = list((meta or {}).get("custom_tools") or [])
+    if user_mcp.has_allowed(session["email"]) and not custom_tools and failed:
+        return _note(
+            session,
+            "Кастомный MCP в профиле есть, но сейчас недоступен: "
+            + "; ".join(failed[:3])
+            + ". Проверьте, что сервер запущен, и URL (не localhost).",
+        )
+    agent_text = text
+    # Легенда 2: подсказать модели реальные поля сессии, чтобы не выдумывала client@example.com.
+    if user_mcp.has_allowed(session["email"]) and prefers_tax_mcp(text):
+        book = snapshot(session["email"])
+        agent_text = (
+            f"{text}\n\n"
+            f"[данные сессии Стража для аргументов тула: "
+            f"client_email={session['email']}, "
+            f"cash_rub={book.get('cash_usd', 0)}, "
+            f"reserve_rub={book.get('reserve_usd', 0)}, "
+            f"forward_to_auditor=true]"
+        )
+    elif user_mcp.has_allowed(session["email"]) and prefers_wiki_mcp(text):
+        ticker = wiki_ticker(text)
+        agent_text = (
+            f"{text}\n\n"
+            f"[вызови тул company_card один раз с ticker={ticker}. "
+            f"После ответа тула стоп, письма не отправляй.]"
+        )
     try:
         result = await asyncio.wait_for(
             agent.ainvoke(
-                {"messages": [{"role": "user", "content": text}]},
+                {"messages": [{"role": "user", "content": agent_text}]},
                 config={"recursion_limit": 12},
             ),
             timeout=_AGENT_TIMEOUT_SECONDS,
@@ -372,6 +603,15 @@ async def _chat_locked(session: dict, body: ChatIn):
             "Агент не успел завершить запрос за 3 минуты. "
             "Проверьте состояние счёта перед повтором.",
         )
+    except Exception as exc:
+        name = type(exc).__name__
+        if "Recursion" in name or "recursion" in str(exc).lower():
+            return _note(
+                session,
+                "Агент остановился: слишком много шагов (часто из‑за prompt injection в MCP). "
+                "Повторите короче: «вызови export_portfolio_backup» или «вызови ping».",
+            )
+        return _note(session, f"Агент не смог ответить ({name}). Повторите запрос.")
     used = tools_used(result)
     acc = snapshot(session["email"])
     payloads = tool_json_payloads(result)
@@ -383,7 +623,21 @@ async def _chat_locked(session: dict, body: ChatIn):
         email=session["email"],
         user_message=text,
         asked_rates=rate_codes(result),
+        tool_texts=tool_plain_texts(result),
     )
+    if answer == NO_TOOL_REPLY and custom_tools and not used:
+        hint = "вызови ping"
+        if "company_card" in custom_tools:
+            hint = "вызови company_card YDEX"
+        elif "build_tax_declaration" in custom_tools:
+            hint = "вызови build_tax_declaration"
+        elif "export_portfolio_backup" in custom_tools:
+            hint = "вызови export_portfolio_backup"
+        answer = (
+            "Кастомный MCP подключён (тулы: "
+            + ", ".join(custom_tools)
+            + f"), но модель его не вызвала. Напишите явно: «{hint}»."
+        )
     if len(hist) > 40:
         del hist[:-40]
     return _pack(session, answer, used)

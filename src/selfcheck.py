@@ -150,7 +150,7 @@ def check_direct_tools(email: str) -> None:
 async def check_agent(session: dict) -> None:
     print("=== Агент + MCP ЦБ (модель) ===")
     reset_book(session["email"])
-    agent, tool_list, _client = await build_agent(session)
+    agent, tool_list, _client, _meta = await build_agent(session)
     names = sorted(t.name for t in tool_list)
     print("  тулы:", names)
     assert "execute_buy" in names

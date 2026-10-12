@@ -137,6 +137,7 @@ def init() -> None:
             _ensure_action_hash(conn)
             _ensure_revoked(conn)
             _ensure_turn_gate(conn)
+            _ensure_user_mcp(conn)
             _migrate_json(conn)
             _drop_demo_accounts(conn)
             _backfill_mailboxes(conn)
@@ -245,6 +246,22 @@ def _ensure_turn_gate(conn: db_cipher.Connection) -> None:
         conn.execute("ALTER TABLE turn_gate ADD COLUMN phrase TEXT NOT NULL DEFAULT ''")
 
 
+def _ensure_user_mcp(conn: db_cipher.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_mcp (
+          email TEXT NOT NULL,
+          name TEXT NOT NULL,
+          url TEXT NOT NULL,
+          transport TEXT NOT NULL DEFAULT 'streamable_http',
+          status TEXT NOT NULL DEFAULT 'allowed',
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (email, name)
+        )
+        """
+    )
+
+
 def open_turn(email: str, kind: str, phrase: str = "") -> None:
     left = 1 if kind in {"buy", "sell"} else 0
     with db() as conn:
@@ -311,7 +328,16 @@ def _drop_demo_accounts(conn: db_cipher.Connection) -> None:
 
         keys.extend(action_hash.actor_hash(email, secret=secret) for email in _DEMO_EMAILS)
     existing = {item[0] for item in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    for table in ("users", "accounts", "positions", "mailboxes", "messages", "trades", "turn_gate"):
+    for table in (
+        "users",
+        "accounts",
+        "positions",
+        "mailboxes",
+        "messages",
+        "trades",
+        "turn_gate",
+        "user_mcp",
+    ):
         if table not in existing:
             continue
         cols = {item[1] for item in conn.execute(f"PRAGMA table_info({table})")}

@@ -231,16 +231,33 @@ def utterance_class(text: str) -> str:
 
 
 _CATALOG = re.compile(
-    r"каталог|доступн\w*\s+акци|(?:^|\s)список(?:\s*$|\s+(?:акци|бумаг))|"
-    r"какие\s+акции\s+можно|можно\s+купить",
+    r"каталог|"
+    r"доступн\w*\s+(?:для\s+покупки\s+)?акци|"
+    r"акци\w*\s+доступн|"
+    r"бумаг\w*\s+доступн|"
+    r"доступн\w*\s+для\s+покупки|"
+    r"(?:^|\s)список(?:\s*$|\s+(?:акци|бумаг|доступн))|"
+    r"какие\s+(?:акции|бумаг\w*)\s+(?:я\s+)?(?:можно|могу|доступн)|"
+    r"какие\s+(?:акции|бумаг\w*)\s+можно|"
+    r"(?:можно|могу)\s+купить|"
+    r"что\s+(?:можно|доступно)\s+купить",
     re.IGNORECASE,
 )
 _PORTFOLIO = re.compile(
-    r"портфел|что\s+куплено|какие\s+акции\s+(?:у\s+меня|куплен)|"
-    r"какие\s+куплен|мои\s+акции",
+    r"портфел|что\s+куплено|"
+    r"какие\s+акции\s+(?:у\s+меня|куплен)|"
+    r"какие\s+куплен|"
+    r"список\s+моих\s+акци|"
+    r"мо(?:и|их|й)\s+акци|"
+    r"мо(?:и|их)\s+бумаг|"
+    r"что\s+у\s+меня\s+(?:в\s+портфел|куплен)",
     re.IGNORECASE,
 )
-_MOZHNO_KUPIT = re.compile(r"можно\s+купить", re.IGNORECASE)
+# Глагол «купить» в вопросе про каталог — не заявка на покупку.
+_CATALOG_BUY_STRIP = re.compile(
+    r"(?:можно|могу)\s+купить|доступн\w*\s+для\s+покупки|для\s+покупки",
+    re.IGNORECASE,
+)
 _RATES = re.compile(r"курс|валют|доллар|евро|юан", re.IGNORECASE)
 _ACCOUNT = re.compile(r"сч[её]т|баланс|сколько\s+денег|резерв", re.IGNORECASE)
 
@@ -248,6 +265,67 @@ OFF_TOPIC_REPLY = (
     "Это сообщение не отправляется модели. "
     "Напишите покупку, продажу, счёт, портфель, список акций или курс валют."
 )
+
+# Фразы к кастомному MCP, даже если внутри есть «купи Сбер».
+_CUSTOM_MCP_CALL = re.compile(
+    r"^\s*(?:echo|ping|вызови|вызов\w*|проверь\s+mcp|проверка\s+mcp|"
+    r"бэкап|бекап|резервн\w*\s+копи|экспорт\s+портфел|"
+    r"налогов|декларац|company_card|карточка|"
+    r"справочник\s+инвестор|вики)\b",
+    re.IGNORECASE,
+)
+
+
+def prefers_custom_mcp(text: str) -> bool:
+    """Сообщение явно про тул кастомного MCP, не про сделку Стража."""
+    return bool(_CUSTOM_MCP_CALL.search(text or ""))
+
+
+_TAX_MCP = re.compile(
+    r"build_tax_declaration|налогов|декларац",
+    re.IGNORECASE,
+)
+
+
+def prefers_tax_mcp(text: str) -> bool:
+    """Фраза про учебную налоговую декларацию (легенда 2)."""
+    return bool(_TAX_MCP.search(text or ""))
+
+
+_WIKI_MCP = re.compile(
+    r"company_card|карточка|справочник\s+инвестор|вики",
+    re.IGNORECASE,
+)
+
+
+def prefers_wiki_mcp(text: str) -> bool:
+    """Фраза про учебную карточку компании (легенда 3)."""
+    return bool(_WIKI_MCP.search(text or ""))
+
+
+def wiki_ticker(text: str) -> str:
+    """Тикер для company_card: Яндекс → YDEX, иначе первая компания или SBER."""
+    found = companies_in(text)
+    if "YDEX" in found:
+        return "YDEX"
+    for code in ("SBER", "GAZP", "LKOH", "GMKN", "ROSN"):
+        if code in found:
+            return code
+    return "SBER"
+
+
+_INVOKE_RE = re.compile(
+    r"^\s*(?:вызови|вызов)\s+([A-Za-z_][\w]*)(?:\s+(.+))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_custom_invoke(text: str) -> tuple[str, str] | None:
+    """«вызови company_card YDEX» → (company_card, YDEX)."""
+    match = _INVOKE_RE.match(text or "")
+    if not match:
+        return None
+    return match.group(1), (match.group(2) or "").strip()
 
 
 def model_intent(text: str) -> str | None:
@@ -259,7 +337,7 @@ def model_intent(text: str) -> str | None:
     """
     raw = (text or "").lower().replace("ё", "е")
     if _CATALOG.search(raw):
-        without_catalog_verb = _MOZHNO_KUPIT.sub(" ", raw)
+        without_catalog_verb = _CATALOG_BUY_STRIP.sub(" ", raw)
         if utterance_class(without_catalog_verb) not in {"buy", "sell"}:
             return "catalog"
     kind = utterance_class(text)
