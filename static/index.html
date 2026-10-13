@@ -252,8 +252,11 @@
 
       <div id="mcp-panel" class="hidden">
         <p class="hint" id="mcp-hint">
-          MCP виден только в вашем чате. Чужой localhost запрещён (анти-SSRF), кроме
-          учебных портов <code>9100–9103</code> (путь <code>/mcp</code>).
+          Сюда подключается любой ваш MCP: сервер сам объявляет тулы, модель этой сессии их видит
+          и по вашей фразе вызывает. Чужие счета и почта в аргументы не попадают.
+          Свой сервер на этой машине: <code>http://host.docker.internal:ПОРТ/mcp</code>
+          или IP в сети, не <code>127.0.0.1</code>.
+          Учебные порты <code>9100–9103</code> — исключение, путь <code>/mcp</code>.
           Transport: <code>streamable_http</code>.
           Чтобы вернуться в чат — <strong>«← К чату»</strong> (не «Выйти»).
         </p>
@@ -274,7 +277,7 @@
             </div>
           </div>
           <label for="mcp-url">URL</label>
-          <input id="mcp-url" name="url" placeholder="http://127.0.0.1:9100/mcp" required />
+          <input id="mcp-url" name="url" placeholder="http://host.docker.internal:9400/mcp" required />
           <button type="submit">Подключить</button>
         </form>
         <div class="err" id="mcp-err"></div>
@@ -419,14 +422,10 @@
           teach.innerHTML = "<li><span class=\"desc\">Каталог учебных MCP пуст.</span></li>";
         }
       }
-      if (data.stub_url) {
-        const urlInput = document.getElementById("mcp-url");
-        if (urlInput && !urlInput.value) urlInput.placeholder = data.stub_url;
-      }
       const items = data.items || [];
       if (!items.length) {
         const empty = document.createElement("li");
-        empty.innerHTML = "<div class=\"meta\">Пока нет подключённых MCP. Подключите встроенную заглушку URL выше.</div>";
+        empty.innerHTML = "<div class=\"meta\">Пока нет подключённых MCP. Учебные адреса — в списке выше, свой сервер — URL в форме.</div>";
         list.appendChild(empty);
         return;
       }

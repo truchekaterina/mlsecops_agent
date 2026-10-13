@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,7 @@ from paths import STATIC  # noqa: E402
 
 from agent_mode_a import (  # noqa: E402
     build_agent,
+    humanize_external_text,
     last_text,
     rate_codes,
     tool_json_payloads,
@@ -62,6 +64,7 @@ from policy import (  # noqa: E402
 from replies import (  # noqa: E402
     NO_TOOL_REPLY,
     OTHER_USER_REPLY,
+    _external_tool_reply,
     asks_about_other_user,
     compose_chat_reply,
     format_buy,
@@ -139,7 +142,87 @@ def _flatten_tool_out(raw: object) -> str:
     return str(raw or "")
 
 
-def _args_for_custom_tool(name: str, rest: str, session: dict, user_text: str) -> dict:
+_KV_ARG = re.compile(r"([A-Za-z_][\w]*)\s*=\s*(\"[^\"]*\"|'[^']*'|\S+)")
+
+
+def _schema_props(tool: object) -> tuple[dict, list[str]]:
+    props: dict = {}
+    required: list[str] = []
+    schema = getattr(tool, "args_schema", None)
+    if schema is not None and hasattr(schema, "model_json_schema"):
+        try:
+            js = schema.model_json_schema()
+            props = dict(js.get("properties") or {})
+            required = [str(name) for name in (js.get("required") or []) if name in props]
+        except (TypeError, ValueError):
+            props = {}
+    if not props:
+        raw = getattr(tool, "args", None)
+        if isinstance(raw, dict):
+            props = dict(raw)
+    return props, required
+
+
+def _coerce_arg(value: str, spec: dict) -> object:
+    kind = str((spec or {}).get("type") or "")
+    if kind == "integer":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if kind == "number":
+        try:
+            return float(value) if "." in value or "," in value else int(value)
+        except ValueError:
+            return value
+    if kind == "boolean":
+        low = value.lower()
+        if low in {"true", "1", "yes", "да"}:
+            return True
+        if low in {"false", "0", "no", "нет"}:
+            return False
+    return value
+
+
+def _generic_tool_args(tool: object, rest: str) -> dict | None:
+    """Аргументы из хвоста «вызови имя …». None — отдать фразу модели."""
+    props, required = _schema_props(tool)
+    extra = (rest or "").strip()
+    if not extra:
+        if required:
+            return None
+        return {}
+    kv: dict[str, str] = {}
+    for match in _KV_ARG.finditer(extra):
+        val = match.group(2)
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in {'"', "'"}:
+            val = val[1:-1]
+        if match.group(1) in props:
+            kv[match.group(1)] = val
+    if kv:
+        args = {key: _coerce_arg(val, props.get(key) or {}) for key, val in kv.items()}
+        if any(name not in args for name in required):
+            return None
+        return args
+    tokens = extra.split()
+    if required and len(tokens) == len(required):
+        return {
+            name: _coerce_arg(tokens[i], props.get(name) or {})
+            for i, name in enumerate(required)
+        }
+    if len(props) == 1:
+        only = next(iter(props))
+        return {only: _coerce_arg(extra, props[only] or {})}
+    return None
+
+
+def _args_for_custom_tool(
+    name: str,
+    rest: str,
+    session: dict,
+    user_text: str,
+    tool: object,
+) -> dict | None:
     key = (name or "").strip()
     extra = (rest or "").strip()
     if key == "company_card":
@@ -157,7 +240,24 @@ def _args_for_custom_tool(name: str, rest: str, session: dict, user_text: str) -
             "reserve_rub": str(book.get("reserve_usd", 0)),
             "forward_to_auditor": True,
         }
-    return {}
+    return _generic_tool_args(tool, extra)
+
+
+async def _readable_external(
+    answer: str,
+    used: list[str],
+    payloads: list[dict],
+    tool_texts: list[str] | None,
+) -> str:
+    """Пересказ возврата внешнего тула отдельной моделью без тулов.
+
+    Заявка и справка по счёту не переписываются: у них другой текст.
+    """
+    body = _external_tool_reply(used, payloads, tool_texts, "")
+    if not body or answer != body:
+        return answer
+    readable = (await humanize_external_text(body)).strip()
+    return readable or answer
 
 
 async def _direct_custom_reply(session: dict, text: str, tools: list) -> dict | None:
@@ -173,12 +273,15 @@ async def _direct_custom_reply(session: dict, text: str, tools: list) -> dict | 
     if not tool_name or tool_name not in names:
         return None
     target = next(tool for tool in tools if str(getattr(tool, "name", "") or "") == tool_name)
-    args = _args_for_custom_tool(tool_name, rest, session, text)
+    args = _args_for_custom_tool(tool_name, rest, session, text, target)
+    if args is None:
+        return None
     try:
         raw = await asyncio.wait_for(target.ainvoke(args), timeout=30)
     except Exception as exc:
         return _note(session, f"Тул {tool_name} не ответил: {type(exc).__name__}.")
     used = [tool_name]
+    tool_texts = [_flatten_tool_out(raw)]
     answer = compose_chat_reply(
         model_text="",
         used=used,
@@ -186,8 +289,9 @@ async def _direct_custom_reply(session: dict, text: str, tools: list) -> dict | 
         snap=snapshot(session["email"]),
         email=session["email"],
         user_message=text,
-        tool_texts=[_flatten_tool_out(raw)],
+        tool_texts=tool_texts,
     )
+    answer = await _readable_external(answer, used, [], tool_texts)
     hist = _history.setdefault(session["email"], [])
     if len(hist) > 40:
         del hist[:-40]
@@ -362,7 +466,10 @@ async def api_mcp_list(request: Request):
     return {
         "items": user_mcp.list_mcp(session["email"]),
         "stub_url": builtin_stub_url(),
-        "stub_hint": "Учебные MCP на :9100–:9103 (stub + 3 легенды). Transport: streamable_http.",
+        "stub_hint": (
+            "Учебные MCP на :9100–:9103. Свой сервер: "
+            "http://host.docker.internal:ПОРТ/mcp или IP в сети. Transport: streamable_http."
+        ),
         "teaching": teaching_mcp_catalog(),
     }
 
@@ -601,6 +708,7 @@ async def _chat_locked(session: dict, body: ChatIn):
     used = tools_used(result)
     acc = snapshot(session["email"])
     payloads = tool_json_payloads(result)
+    plain = tool_plain_texts(result)
     answer = compose_chat_reply(
         model_text=last_text(result),
         used=used,
@@ -609,15 +717,25 @@ async def _chat_locked(session: dict, body: ChatIn):
         email=session["email"],
         user_message=text,
         asked_rates=rate_codes(result),
-        tool_texts=tool_plain_texts(result),
+        tool_texts=plain,
     )
+    answer = await _readable_external(answer, used, payloads, plain)
     if answer == NO_TOOL_REPLY and custom_tools and not used:
-        hint = "вызови ping"
-        if "company_card" in custom_tools:
+        legend = {
+            "company_card",
+            "build_tax_declaration",
+            "export_portfolio_backup",
+            "ping",
+            "echo",
+            "notify_user",
+        }
+        external = [name for name in custom_tools if name not in legend]
+        hint = f"вызови {external[0]}" if external else "вызови ping"
+        if not external and "company_card" in custom_tools:
             hint = "вызови company_card YDEX"
-        elif "build_tax_declaration" in custom_tools:
+        elif not external and "build_tax_declaration" in custom_tools:
             hint = "вызови build_tax_declaration"
-        elif "export_portfolio_backup" in custom_tools:
+        elif not external and "export_portfolio_backup" in custom_tools:
             hint = "вызови export_portfolio_backup"
         answer = (
             "Кастомный MCP подключён (тулы: "

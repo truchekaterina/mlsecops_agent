@@ -51,6 +51,9 @@ services:
         condition: service_healthy
       ollama-pull:
         condition: service_completed_successfully
+    extra_hosts:
+      # Свой MCP на машине с Docker: http://host.docker.internal:ПОРТ/mcp
+      - "host.docker.internal:host-gateway"
     volumes:
       - strazh-data:/app/data
     healthcheck:

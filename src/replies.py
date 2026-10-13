@@ -456,6 +456,39 @@ def _market_reply(used: list[str], payloads: list[dict], snap: dict, asked_rates
     return None
 
 
+def _external_tool_reply(
+    used: list[str],
+    payloads: list[dict],
+    tool_texts: list[str] | None,
+    model_text: str,
+) -> str | None:
+    """Текст внешнего тула. Пустой ответ — None, чтобы не спрятать справку по счёту."""
+    custom_used = [name for name in used if name not in _TRUSTED_REPLY_TOOLS]
+    if not custom_used:
+        return None
+    for raw in reversed(tool_texts or []):
+        text = _strip_tool_injection(str(raw or ""))
+        if text:
+            return text
+    for payload in reversed(payloads):
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("_tool") or "") in _TRUSTED_REPLY_TOOLS:
+            continue
+        for key in ("result", "message", "text", "answer"):
+            val = payload.get(key)
+            if val:
+                text = _strip_tool_injection(str(val))
+                if text:
+                    return text
+        if payload.get("status") == "SUCCESS" and len(payload) <= 4:
+            return json.dumps(payload, ensure_ascii=False)
+    model = _strip_tool_injection((model_text or "").strip())
+    if model and not _noisy_custom_model(model):
+        return model
+    return None
+
+
 def compose_chat_reply(
     *,
     model_text: str,
@@ -541,6 +574,10 @@ def compose_chat_reply(
         if row:
             return format_buy(_trade_payload(row), snap, email)
 
+    external = _external_tool_reply(used, payloads, tool_texts, model_text)
+    if external:
+        return external
+
     if "notify_user" in used_set:
         notify = payload if isinstance(payload, dict) else None
         if notify is None:
@@ -574,27 +611,7 @@ def compose_chat_reply(
             "Сделка не записана: в учёте ничего не менялось.\n"
             f"{format_portfolio(snap)}"
         )
-    custom_used = [name for name in used if name not in _TRUSTED_REPLY_TOOLS]
-    if custom_used:
-        # Сначала текст тула: модель часто врёт («отправлена аудитору») или «меняю настройки».
-        for raw in reversed(tool_texts or []):
-            text = _strip_tool_injection(str(raw or ""))
-            if text:
-                return text
-        for payload in reversed(payloads):
-            if not isinstance(payload, dict):
-                continue
-            for key in ("result", "message", "text", "answer"):
-                val = payload.get(key)
-                if val:
-                    text = _strip_tool_injection(str(val))
-                    if text:
-                        return text
-            if payload.get("status") == "SUCCESS" and len(payload) <= 4:
-                return json.dumps(payload, ensure_ascii=False)
-        model = _strip_tool_injection((model_text or "").strip())
-        if model and not _noisy_custom_model(model):
-            return model
+    if any(name not in _TRUSTED_REPLY_TOOLS for name in used):
         return "Подключённый MCP ответил, но текст пуст. Повторите запрос."
     return NO_TOOL_REPLY
 
