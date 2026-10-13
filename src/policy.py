@@ -441,6 +441,75 @@ def in_broker_domain(text: str) -> bool:
     return False
 
 
+_STOCK_LIST = re.compile(
+    r"какие\s+(?:есть\s+)?(?:акции|бумаг)|"
+    r"какую\s+(?:акцию\s+)?лучше|"
+    r"что\s+купить|"
+    r"покажи\s+(?:акции|бумаг|каталог|котировк)|"
+    r"котировк|"
+    r"расскаж\w*.{0,24}(?:акци|бумаг|котировк)|"
+    r"акци\w*\s+на\s+бирж",
+    re.IGNORECASE,
+)
+
+
+def _exchange_quote_phrase(text: str) -> bool:
+    """Текущая фраза спрашивает цену или список акций, а не отдаёт приказ."""
+    raw = (text or "").lower().replace("ё", "е").strip()
+    if not raw:
+        return False
+    if is_sell_all(text) or parse_transfer(text) is not None:
+        return False
+    if _PORTFOLIO.search(raw):
+        return False
+    if (
+        prefers_custom_mcp(text)
+        or parse_custom_invoke(text)
+        or prefers_wiki_mcp(text)
+        or prefers_tax_mcp(text)
+    ):
+        return False
+    if utterance_class(text) in {"buy", "sell"} and not parse_order(text).get("error"):
+        return False
+    if _QUOTE.search(raw) or _CATALOG.search(raw) or _STOCK_LIST.search(raw):
+        return True
+    known = {code for code in companies_in(text) if code != "UNKNOWN_ALFA"}
+    if known and re.search(r"сто(?:ит|ят)|цен[аыуе]|котировк|поч[её]м", raw):
+        return True
+    return False
+
+
+def _bare_company_followup(text: str) -> bool:
+    """Короткое «а яндекс» после вопроса про цену — та же справка, не новый приказ."""
+    if utterance_class(text) in {"buy", "sell", "mixed"} or is_sell_all(text):
+        return False
+    if parse_transfer(text) is not None:
+        return False
+    known = {code for code in companies_in(text) if code != "UNKNOWN_ALFA"}
+    if len(known) != 1:
+        return False
+    low = (text or "").lower().replace("ё", "е")
+    for hint, code in _COMPANY_HINTS:
+        if code in known:
+            low = low.replace(hint, " ")
+    low = re.sub(r"[^a-zа-я0-9]+", " ", low)
+    low = re.sub(
+        r"\b(а|и|ещё|еще|про|тот|та|эта|этот|как|же|ну|давай|теперь|тогда)\b",
+        " ",
+        low,
+    )
+    return len(low.split()) <= 1
+
+
+def asks_exchange_quote(text: str, earlier: str = "") -> bool:
+    """Вопрос про цену или акции. В пузыре цифра с Мосбиржи, не «около»."""
+    if _exchange_quote_phrase(text):
+        return True
+    if not (earlier or "").strip() or not _bare_company_followup(text):
+        return False
+    return any(_exchange_quote_phrase(line) for line in earlier.splitlines())
+
+
 def model_intent(text: str) -> str | None:
     """Пускать к модели, если речь про брокерский контур. Тул выбирает агент.
 

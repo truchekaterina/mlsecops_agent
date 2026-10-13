@@ -537,6 +537,26 @@ def _external_tool_reply(
     return None
 
 
+def format_exchange_quotes(text: str) -> str:
+    """Цены названных бумаг или всего каталога. Источник — Мосбиржа, не текст модели."""
+    from ledger import INSTRUMENTS, instrument
+    from policy import companies_in
+
+    order = [code for code in INSTRUMENTS if code in companies_in(text)]
+    tickers = order or list(INSTRUMENTS)
+    lines = ["Цены с Мосбиржи:"]
+    for ticker in tickers:
+        inst = instrument(ticker) or {}
+        name = inst.get("name") or INSTRUMENTS[ticker]["name"]
+        price = inst.get("price_rub")
+        if price is None:
+            lines.append(f"- {name} ({ticker}): цена с Мосбиржи сейчас недоступна")
+            continue
+        note = f", {inst.get('price_note')}" if inst.get("price_note") else ""
+        lines.append(f"- {name} ({ticker}): {price} ₽{note}")
+    return "\n".join(lines)
+
+
 def compose_chat_reply(
     *,
     model_text: str,
@@ -547,9 +567,14 @@ def compose_chat_reply(
     user_message: str,
     asked_rates: list[str] | None = None,
     tool_texts: list[str] | None = None,
+    earlier: str = "",
 ) -> str:
     """Цифры после тула — из учёта. Решение, какой тул жать, принимает агент."""
+    from policy import asks_exchange_quote
+
     used_set = set(used)
+    if asks_exchange_quote(user_message, earlier):
+        return format_exchange_quotes(user_message)
     payload = _pick_trade_payload(payloads)
     pending = snap.get("pending_reserve")
 

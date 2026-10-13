@@ -55,6 +55,7 @@ from policy import (  # noqa: E402
     prefers_tax_mcp,
     prefers_wiki_mcp,
     wiki_ticker,
+    asks_exchange_quote,
     recover_layout,
     rewrites_own_book,
     several_companies,
@@ -66,6 +67,7 @@ from replies import (  # noqa: E402
     _external_tool_reply,
     asks_about_other_user,
     compose_chat_reply,
+    format_exchange_quotes,
     format_buy,
     format_sell,
     format_transfer,
@@ -495,15 +497,21 @@ async def _chat_locked(session: dict, body: ChatIn):
             mixed = _open_money_turn(session, text)
             if mixed:
                 return _note(session, mixed)
+    # Цена и список акций — с Мосбиржи. Модель на этом ходе не пишет «около».
+    if asks_exchange_quote(text, _earlier_user_lines(hist)):
+        return _note(session, format_exchange_quotes(text))
     classified = False
     if not regex_trade and not explicit_mcp:
         if _chat_limited(session["email"]):
             return _note(session, "Слишком много запросов к модели. Подождите минуту.")
         _chat_used(session["email"])
         classified = True
-        kind = await classify_utterance(text, _earlier_user_lines(hist))
-        if kind not in {"справка", "внешний"} or (kind == "внешний" and not has_mcp):
-            return await _say(session, text)
+        earlier = _earlier_user_lines(hist)
+        # Цена и список акций не уходят в ответ без тулов: модель пишет «около».
+        if not asks_exchange_quote(text, earlier):
+            kind = await classify_utterance(text, earlier)
+            if kind not in {"справка", "внешний"} or (kind == "внешний" and not has_mcp):
+                return await _say(session, text)
     if not classified:
         if _chat_limited(session["email"]):
             return _note(session, "Слишком много запросов к модели. Подождите минуту.")
@@ -585,6 +593,7 @@ async def _chat_locked(session: dict, body: ChatIn):
         user_message=text,
         asked_rates=rate_codes(result),
         tool_texts=plain,
+        earlier=_earlier_user_lines(hist),
     )
     answer = await _readable_external(answer, used, payloads, plain)
     if not used and custom_tools and not (model_text or "").strip():
