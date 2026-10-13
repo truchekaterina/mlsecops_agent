@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -26,6 +25,8 @@ from paths import STATIC  # noqa: E402
 
 from agent_mode_a import (  # noqa: E402
     build_agent,
+    classify_utterance,
+    converse_without_tools,
     humanize_external_text,
     last_text,
     rate_codes,
@@ -44,11 +45,9 @@ from mcp_strazh import (  # noqa: E402
     set_client,
 )
 from policy import (  # noqa: E402
-    OFF_TOPIC_REPLY,
     is_no,
     is_sell_all,
     is_yes,
-    model_intent,
     parse_order,
     parse_transfer,
     parse_custom_invoke,
@@ -57,12 +56,12 @@ from policy import (  # noqa: E402
     prefers_wiki_mcp,
     wiki_ticker,
     recover_layout,
+    rewrites_own_book,
     several_companies,
     story_block,
     utterance_class,
 )
 from replies import (  # noqa: E402
-    NO_TOOL_REPLY,
     OTHER_USER_REPLY,
     _external_tool_reply,
     asks_about_other_user,
@@ -70,6 +69,8 @@ from replies import (  # noqa: E402
     format_buy,
     format_sell,
     format_transfer,
+    refused_book_change,
+    spoken_reply,
 )
 
 signing_secret()
@@ -89,7 +90,7 @@ _LOGIN_WINDOW = 60.0
 _CHAT_LIMIT = 4
 _CHAT_WINDOW = 60.0
 _AGENT_TIMEOUT_SECONDS = 180
-_DIALOG_TURNS = 4
+_USER_BACK = 3
 _DIALOG_CHARS = 400
 
 
@@ -128,121 +129,6 @@ async def _hold_user(email: str) -> asyncio.Lock:
         return lock
 
 
-def _flatten_tool_out(raw: object) -> str:
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, list):
-        parts = []
-        for item in raw:
-            if isinstance(item, dict) and item.get("text") is not None:
-                parts.append(str(item["text"]))
-            else:
-                parts.append(str(item))
-        return "\n".join(parts)
-    return str(raw or "")
-
-
-_KV_ARG = re.compile(r"([A-Za-z_][\w]*)\s*=\s*(\"[^\"]*\"|'[^']*'|\S+)")
-
-
-def _schema_props(tool: object) -> tuple[dict, list[str]]:
-    props: dict = {}
-    required: list[str] = []
-    schema = getattr(tool, "args_schema", None)
-    if schema is not None and hasattr(schema, "model_json_schema"):
-        try:
-            js = schema.model_json_schema()
-            props = dict(js.get("properties") or {})
-            required = [str(name) for name in (js.get("required") or []) if name in props]
-        except (TypeError, ValueError):
-            props = {}
-    if not props:
-        raw = getattr(tool, "args", None)
-        if isinstance(raw, dict):
-            props = dict(raw)
-    return props, required
-
-
-def _coerce_arg(value: str, spec: dict) -> object:
-    kind = str((spec or {}).get("type") or "")
-    if kind == "integer":
-        try:
-            return int(value)
-        except ValueError:
-            return value
-    if kind == "number":
-        try:
-            return float(value) if "." in value or "," in value else int(value)
-        except ValueError:
-            return value
-    if kind == "boolean":
-        low = value.lower()
-        if low in {"true", "1", "yes", "да"}:
-            return True
-        if low in {"false", "0", "no", "нет"}:
-            return False
-    return value
-
-
-def _generic_tool_args(tool: object, rest: str) -> dict | None:
-    """Аргументы из хвоста «вызови имя …». None — отдать фразу модели."""
-    props, required = _schema_props(tool)
-    extra = (rest or "").strip()
-    if not extra:
-        if required:
-            return None
-        return {}
-    kv: dict[str, str] = {}
-    for match in _KV_ARG.finditer(extra):
-        val = match.group(2)
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in {'"', "'"}:
-            val = val[1:-1]
-        if match.group(1) in props:
-            kv[match.group(1)] = val
-    if kv:
-        args = {key: _coerce_arg(val, props.get(key) or {}) for key, val in kv.items()}
-        if any(name not in args for name in required):
-            return None
-        return args
-    tokens = extra.split()
-    if required and len(tokens) == len(required):
-        return {
-            name: _coerce_arg(tokens[i], props.get(name) or {})
-            for i, name in enumerate(required)
-        }
-    if len(props) == 1:
-        only = next(iter(props))
-        return {only: _coerce_arg(extra, props[only] or {})}
-    return None
-
-
-def _args_for_custom_tool(
-    name: str,
-    rest: str,
-    session: dict,
-    user_text: str,
-    tool: object,
-) -> dict | None:
-    key = (name or "").strip()
-    extra = (rest or "").strip()
-    if key == "company_card":
-        ticker = extra.split()[0] if extra else wiki_ticker(user_text)
-        return {"ticker": ticker}
-    if key == "echo":
-        return {"text": extra or "привет"}
-    if key == "notify_user":
-        return {"text": extra or "Тест системы"}
-    if key == "build_tax_declaration":
-        book = snapshot(session["email"])
-        return {
-            "client_email": session["email"],
-            "cash_rub": str(book.get("cash_usd", 0)),
-            "reserve_rub": str(book.get("reserve_usd", 0)),
-            "forward_to_auditor": True,
-        }
-    return _generic_tool_args(tool, extra)
-
-
 async def _readable_external(
     answer: str,
     used: list[str],
@@ -258,44 +144,6 @@ async def _readable_external(
         return answer
     readable = (await humanize_external_text(body)).strip()
     return readable or answer
-
-
-async def _direct_custom_reply(session: dict, text: str, tools: list) -> dict | None:
-    """Явный «вызови тул» / карточка вики — без модели (qwen часто пропускает вызов)."""
-    names = {str(getattr(tool, "name", "") or "") for tool in tools}
-    parsed = parse_custom_invoke(text)
-    tool_name = ""
-    rest = ""
-    if parsed:
-        tool_name, rest = parsed
-    elif prefers_wiki_mcp(text) and "company_card" in names:
-        tool_name, rest = "company_card", wiki_ticker(text)
-    if not tool_name or tool_name not in names:
-        return None
-    target = next(tool for tool in tools if str(getattr(tool, "name", "") or "") == tool_name)
-    args = _args_for_custom_tool(tool_name, rest, session, text, target)
-    if args is None:
-        return None
-    try:
-        raw = await asyncio.wait_for(target.ainvoke(args), timeout=30)
-    except Exception as exc:
-        return _note(session, f"Тул {tool_name} не ответил: {type(exc).__name__}.")
-    used = [tool_name]
-    tool_texts = [_flatten_tool_out(raw)]
-    answer = compose_chat_reply(
-        model_text="",
-        used=used,
-        payloads=[],
-        snap=snapshot(session["email"]),
-        email=session["email"],
-        user_message=text,
-        tool_texts=tool_texts,
-    )
-    answer = await _readable_external(answer, used, [], tool_texts)
-    hist = _history.setdefault(session["email"], [])
-    if len(hist) > 40:
-        del hist[:-40]
-    return _pack(session, answer, used)
 
 
 def _bind_client(session: dict) -> None:
@@ -539,18 +387,45 @@ def _note(session: dict, text: str) -> dict:
     return _pack(session, text, [])
 
 
-def _dialog_messages(hist: list, current: str) -> list[dict]:
-    """Короткий хвост диалога + текущая фраза. Сверку сделки по-прежнему даёт этот ход."""
-    prior: list[dict] = []
+def _prior_rows(hist: list) -> list[dict]:
+    """До трёх предыдущих фраз клиента и ответы между ними. Текущая фраза не входит."""
+    cleaned: list[dict] = []
     for row in hist[:-1]:
         role = str(row.get("role") or "")
         content = str(row.get("content") or "").strip()
         if role not in {"user", "assistant"} or not content:
             continue
-        prior.append({"role": role, "content": content[:_DIALOG_CHARS]})
-    prior = prior[-_DIALOG_TURNS:]
+        cleaned.append({"role": role, "content": content[:_DIALOG_CHARS]})
+    kept: list[dict] = []
+    users = 0
+    for row in reversed(cleaned):
+        kept.append(row)
+        if row["role"] == "user":
+            users += 1
+            if users >= _USER_BACK:
+                break
+    kept.reverse()
+    return kept
+
+
+def _earlier_user_lines(hist: list) -> str:
+    lines = [row["content"] for row in _prior_rows(hist) if row["role"] == "user"]
+    return "\n".join(lines)
+
+
+def _dialog_messages(hist: list, current: str) -> list[dict]:
+    """Три предыдущие фразы клиента с ответами и текущая фраза. Сверку сделки даёт этот ход."""
+    prior = _prior_rows(hist)
     prior.append({"role": "user", "content": current})
     return prior
+
+
+async def _say(session: dict, user_text: str) -> dict:
+    """Ответ без тулов. Заявление о сделке или пустом портфеле заменяется книгой."""
+    hist = _history.setdefault(session["email"], [])
+    spoken = await converse_without_tools(user_text, _earlier_user_lines(hist))
+    text = spoken_reply(spoken, snapshot(session["email"]))
+    return _note(session, text)
 
 
 def _open_money_turn(session: dict, message: str) -> str | None:
@@ -600,48 +475,39 @@ async def _chat_locked(session: dict, body: ChatIn):
             deny_ticket(str(pending.get("id") or ""))
             return _note(session, "Заявка отменена, счёт не менялся.")
         return _note(session, "Открытой заявки нет.")
-    # Приказ не исполняется здесь. Агент сам вызывает тул.
-    # open_turn только записывает фразу, чтобы тул сверил бумагу и число.
+    if rewrites_own_book(text):
+        return _note(session, refused_book_change(snapshot(session["email"])))
+    # open_turn записывает фразу. Тул вызывает агент, сервер сверяет бумагу и число.
     agent_order = is_sell_all(text) or parse_transfer(text) is not None
-    transfer = parse_transfer(text)
-    if transfer is not None and transfer.get("error"):
-        return _note(session, str(transfer["error"]))
     several = several_companies(text)
     if several:
         return _note(session, several)
-    intent = model_intent(text)
-    # «echo: купи Сбер» / «вызови ping» — к кастомному MCP, не в execute_buy.
-    if user_mcp.has_allowed(session["email"]) and prefers_custom_mcp(text):
-        intent = None
-        agent_order = False
-    if intent is None and not agent_order and not user_mcp.has_allowed(session["email"]):
-        return _note(session, OFF_TOPIC_REPLY)
-    if intent in {"buy", "sell", "mixed"}:
+    has_mcp = user_mcp.has_allowed(session["email"])
+    # «вызови ping» / «echo: купи Сбер» — явный тул MCP, не заявка.
+    explicit_mcp = has_mcp and (
+        prefers_custom_mcp(text) or parse_custom_invoke(text) or prefers_wiki_mcp(text)
+    )
+    trade_kind = utterance_class(text)
+    regex_trade = (trade_kind in {"buy", "sell", "mixed"} or agent_order) and not explicit_mcp
+    if regex_trade and trade_kind in {"buy", "sell", "mixed"}:
         order = parse_order(text)
-        if order.get("error"):
-            return _note(session, str(order["error"]))
-        mixed = _open_money_turn(session, text)
-        if mixed:
-            return _note(session, mixed)
-    if user_mcp.has_allowed(session["email"]) and (
-        parse_custom_invoke(text) or prefers_wiki_mcp(text)
-    ):
-        _agent, tools, _client, meta = await _agent_for(session)
-        failed = list((meta or {}).get("custom_failed") or [])
-        custom_tools = list((meta or {}).get("custom_tools") or [])
-        if not custom_tools and failed:
-            return _note(
-                session,
-                "Кастомный MCP в профиле есть, но сейчас недоступен: "
-                + "; ".join(failed[:3])
-                + ". Проверьте, что сервер запущен, и URL (не localhost).",
-            )
-        direct = await _direct_custom_reply(session, text, tools)
-        if direct is not None:
-            return direct
-    if _chat_limited(session["email"]):
-        return _note(session, "Слишком много запросов к модели. Подождите минуту.")
-    _chat_used(session["email"])
+        if not order.get("error"):
+            mixed = _open_money_turn(session, text)
+            if mixed:
+                return _note(session, mixed)
+    classified = False
+    if not regex_trade and not explicit_mcp:
+        if _chat_limited(session["email"]):
+            return _note(session, "Слишком много запросов к модели. Подождите минуту.")
+        _chat_used(session["email"])
+        classified = True
+        kind = await classify_utterance(text, _earlier_user_lines(hist))
+        if kind not in {"справка", "внешний"} or (kind == "внешний" and not has_mcp):
+            return await _say(session, text)
+    if not classified:
+        if _chat_limited(session["email"]):
+            return _note(session, "Слишком много запросов к модели. Подождите минуту.")
+        _chat_used(session["email"])
     agent, _tools, _client, meta = await _agent_for(session)
     failed = list((meta or {}).get("custom_failed") or [])
     custom_tools = list((meta or {}).get("custom_tools") or [])
@@ -709,8 +575,9 @@ async def _chat_locked(session: dict, body: ChatIn):
     acc = snapshot(session["email"])
     payloads = tool_json_payloads(result)
     plain = tool_plain_texts(result)
+    model_text = last_text(result)
     answer = compose_chat_reply(
-        model_text=last_text(result),
+        model_text=model_text,
         used=used,
         payloads=payloads,
         snap=acc,
@@ -720,7 +587,7 @@ async def _chat_locked(session: dict, body: ChatIn):
         tool_texts=plain,
     )
     answer = await _readable_external(answer, used, payloads, plain)
-    if answer == NO_TOOL_REPLY and custom_tools and not used:
+    if not used and custom_tools and not (model_text or "").strip():
         legend = {
             "company_card",
             "build_tax_declaration",
@@ -742,6 +609,7 @@ async def _chat_locked(session: dict, body: ChatIn):
             + ", ".join(custom_tools)
             + f"), но модель его не вызвала. Напишите явно: «{hint}»."
         )
+    hist.append({"role": "assistant", "content": answer})
     if len(hist) > 40:
         del hist[:-40]
     return _pack(session, answer, used)

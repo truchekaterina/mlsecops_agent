@@ -11,21 +11,13 @@ TICKET_SECONDS = 180
 _BUY = re.compile(r"куп(?:и|ить|лю|им)|(?<!\w)капи(?!\w)", re.IGNORECASE)
 _SELL = re.compile(r"прода(?:й|ть|м|дим|дите)", re.IGNORECASE)
 _SELL_ALL = re.compile(
-    r"прода(?:й|ть|йте)\s+вс[её]|весь\s+портфел|все\s+(?:мои\s+)?акции",
+    r"прода(?:й|ть|йте).{0,30}вс[её]|весь\s+(?:мой\s+)?портфел|"
+    r"все\s+(?:мои\s+)?акции|акции\s+все",
     re.IGNORECASE,
 )
 _TRANSFER = re.compile(r"перев(?:е|о)д", re.IGNORECASE)
 _NUMBER = re.compile(r"(\d+(?:[.,]\d+)?)")
 _ACCOUNT_NO = re.compile(r"\d{12,}")
-_PANIC = re.compile(r"паник|обвал|слух", re.IGNORECASE)
-_LEAK_ASK = re.compile(
-    r"забудь\s+(?:правила|инструкц)"
-    r"|(?:покажи(?:те)?|выведи|повтори|раскрой)\s+(?:мне\s+)?"
-    r"(?:свою\s+)?(?:системн\w*|инструкц\w*|промпт|правила\s+системы)"
-    r"|system\s+prompt"
-    r"|ignore\s+(?:previous|all)\s+instructions?",
-    re.IGNORECASE,
-)
 _YES = re.compile(r"^\s*да\s*[.!]?\s*$", re.IGNORECASE)
 _NO = re.compile(r"^\s*(?:нет|отмена)\s*[.!]?\s*$", re.IGNORECASE)
 _NAME = re.compile(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё \-]{0,79}\Z")
@@ -38,13 +30,22 @@ def clean_name(name: str) -> str:
     return text
 
 
+_REWRITE_BOOK = re.compile(
+    r"(?<!\w)(?:сделай|поставь|установи|измени|запиши|поменяй|зачисли|начисли|пополни).{0,60}"
+    r"(?:остаток|баланс|сч[её]т|резерв|цен[уыае]|котировк|\d)"
+    r"|(?:остаток|баланс|сч[её]т|резерв).{0,40}(?<!\w)пополни",
+    re.IGNORECASE,
+)
+
+
+def rewrites_own_book(text: str) -> bool:
+    """Просьба записать остаток или цену из фразы. Книгу не меняет."""
+    return _REWRITE_BOOK.search(text or "") is not None
+
+
 def story_block(text: str) -> str | None:
-    raw = text or ""
-    if _PANIC.search(raw):
-        return "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку."
-    if _LEAK_ASK.search(raw):
-        return "Такое сообщение не исполняется. Напишите обычную покупку, продажу или справку."
-    if _ACCOUNT_NO.search(raw):
+    """Номер счёта в тексте не принимается. Тему фразы решает классификатор."""
+    if _ACCOUNT_NO.search(text or ""):
         return "Номер счёта в сообщении не принимается."
     return None
 
@@ -89,8 +90,11 @@ def companies_in(text: str) -> set[str]:
 
 
 def several_companies(text: str) -> str | None:
-    """Отказ, если в одной фразе две компании. Сделку не исполняет."""
-    if utterance_class(text) not in {"buy", "sell"}:
+    """Отказ, если в одном приказе две компании. Вопрос модели не отбирает."""
+    raw = text or ""
+    if utterance_class(raw) not in {"buy", "sell"}:
+        return None
+    if re.search(r"(?<!\w)(?:купи|продай|капи)(?!\w)", raw, re.IGNORECASE) is None:
         return None
     if len(companies_in(text)) < 2:
         return None
@@ -355,8 +359,8 @@ _BROKER_DOMAIN = re.compile(
 )
 
 OFF_TOPIC_REPLY = (
-    "Это сообщение не отправляется модели. "
-    "Напишите про свой счёт, портфель, акции или курс валют."
+    "Такой запрос не выполняется. "
+    "Напишите про свой счёт, портфель, акции, курс или подключённый сервис."
 )
 
 # Фразы к кастомному MCP, даже если внутри есть «купи Сбер».

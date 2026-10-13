@@ -1,20 +1,20 @@
 {
   "source": "iss.moex.com TQBR",
   "rows": {
-    "GAZP": {
-      "ticker": "GAZP",
-      "name": "Газпром",
-      "shortname": "ГАЗПРОМ ао",
-      "price": 103.48,
-      "source": "LAST",
-      "price_note": "последняя сделка",
-      "doubtful": false
-    },
     "SBER": {
       "ticker": "SBER",
       "name": "Сбербанк",
       "shortname": "Сбербанк",
-      "price": 287.36,
+      "price": 287.16,
+      "source": "LAST",
+      "price_note": "последняя сделка",
+      "doubtful": false
+    },
+    "GAZP": {
+      "ticker": "GAZP",
+      "name": "Газпром",
+      "shortname": "ГАЗПРОМ ао",
+      "price": 104.56,
       "source": "LAST",
       "price_note": "последняя сделка",
       "doubtful": false
@@ -23,7 +23,7 @@
       "ticker": "LKOH",
       "name": "Лукойл",
       "shortname": "ЛУКОЙЛ",
-      "price": 5995.5,
+      "price": 6063.5,
       "source": "LAST",
       "price_note": "последняя сделка",
       "doubtful": false
@@ -32,7 +32,7 @@
       "ticker": "GMKN",
       "name": "Норникель",
       "shortname": "ГМКНорНик",
-      "price": 118.94,
+      "price": 118.4,
       "source": "LAST",
       "price_note": "последняя сделка",
       "doubtful": false
@@ -41,7 +41,7 @@
       "ticker": "ROSN",
       "name": "Роснефть",
       "shortname": "Роснефть",
-      "price": 376.4,
+      "price": 377.35,
       "source": "LAST",
       "price_note": "последняя сделка",
       "doubtful": false
@@ -50,7 +50,7 @@
       "ticker": "YDEX",
       "name": "Яндекс",
       "shortname": "ЯНДЕКС",
-      "price": 3510.0,
+      "price": 3486.0,
       "source": "LAST",
       "price_note": "последняя сделка",
       "doubtful": false

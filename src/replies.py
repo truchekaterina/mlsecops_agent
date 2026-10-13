@@ -25,6 +25,31 @@ def _fresh_trade(row: dict | None) -> dict | None:
     return row
 
 
+def refused_book_change(snap: dict) -> str:
+    """Остаток и цена из фразы в книгу не пишутся."""
+    return (
+        "Так нельзя: остаток и цену из сообщения записать нельзя. "
+        "Цена берётся с Мосбиржи, остаток меняется только покупкой или продажей после кнопки.\n"
+        f"Основной счёт: {snap.get('cash_usd', 0)} ₽. "
+        f"Резерв: {snap.get('reserve_usd', 0)} ₽."
+    )
+
+
+def spoken_reply(model_text: str, snap: dict) -> str:
+    """Живой текст модели. Ложь про сделку или пустой портфель заменяется книгой."""
+    text = _strip_tool_injection(model_text or "").strip()
+    if _CLAIM_RE.search(text):
+        return refused_book_change(snap) + "\n" + format_portfolio(snap)
+    if _EMPTY_PORTFOLIO.search(text):
+        return format_portfolio(snap)
+    if text:
+        return text
+    return (
+        "Могу показать ваш счёт, портфель или курс и принять покупку или продажу. "
+        "Остаток и цену из сообщения не меняю."
+    )
+
+
 def format_holdings(snap: dict) -> str:
     pos = snap.get("positions") or []
     if not pos:
@@ -315,9 +340,25 @@ def _own_tokens(email: str, name: str) -> set[str]:
     return tokens
 
 
+_NOT_A_NAME = frozenset(
+    {
+        "тебя", "тебе", "тобой", "тобою", "меня", "мне", "мной", "мною",
+        "нас", "нам", "нами", "вас", "вам", "вами", "себя", "себе", "собой",
+        "тот", "та", "то", "те", "этот", "эта", "это", "эти", "того", "этого",
+        "свой", "своя", "свое", "своё", "свои", "мой", "моя", "мое", "моё", "мои",
+        "наш", "наша", "наше", "наши",
+        "пополнить", "пополни", "показать", "покажи",
+        "литературы", "литературу", "покупки", "покупку", "продажи", "продажу",
+        "работы", "работу", "примера", "пример", "сервиса", "сервис", "сервису",
+        "промпт", "промпта", "промту", "промт", "промта", "пропт", "пропта",
+        "системный", "системного", "системную",
+    }
+)
+
+
 def _known_word(token: str, own: set[str]) -> bool:
     token = _clean_token(token)
-    if not token or token.isdigit():
+    if not token or token.isdigit() or token in _NOT_A_NAME:
         return True
     if token in own:
         return True
@@ -386,7 +427,14 @@ def format_transfer(payload: dict) -> str:
 
 
 _CLAIM_RE = re.compile(
-    r"вы\s+(купили|продали)|сумма\s+покупки|стоимость\s+покупки|письмо\s+[«\"]куплено|перевед|вызван тул|status\s*=\s*success",
+    r"вы\s+(купили|продали)|сумма\s+покупки|стоимость\s+покупки|письмо\s+[«\"]куплено|"
+    r"зачислил|поставил\s+остаток|"
+    r"остаток\s+(?:стал|теперь|будет)|баланс\s+(?:стал|теперь|будет)|"
+    r"на\s+сч[её]те\s+(?:теперь|стало|будет)",
+    re.IGNORECASE,
+)
+_EMPTY_PORTFOLIO = re.compile(
+    r"нет\s+акци|акци\w*\s+нет|портфел\w*\s+пуст|ничего\s+не\s+куплен",
     re.IGNORECASE,
 )
 def _trade_payload(row: dict) -> dict:
@@ -607,13 +655,10 @@ def compose_chat_reply(
         return info
 
     if _CLAIM_RE.search(model_text or "") and "execute_buy" not in used_set and "execute_sell" not in used_set and "sell_all" not in used_set and "confirm_reserve_purchase" not in used_set and "transfer_between" not in used_set:
-        return (
-            "Сделка не записана: в учёте ничего не менялось.\n"
-            f"{format_portfolio(snap)}"
-        )
+        return refused_book_change(snap)
     if any(name not in _TRUSTED_REPLY_TOOLS for name in used):
         return "Подключённый MCP ответил, но текст пуст. Повторите запрос."
-    return NO_TOOL_REPLY
+    return spoken_reply(model_text, snap)
 
 
 _TOOL_INJECT_BLOCK = re.compile(
