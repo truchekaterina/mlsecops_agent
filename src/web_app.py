@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 import time
@@ -40,10 +39,6 @@ from mcp_strazh import (  # noqa: E402
     _log,
     confirm_ticket,
     deny_ticket,
-    execute_buy,
-    execute_sell,
-    propose_sell_all,
-    propose_transfer,
     set_client,
 )
 from policy import (  # noqa: E402
@@ -91,6 +86,8 @@ _LOGIN_WINDOW = 60.0
 _CHAT_LIMIT = 4
 _CHAT_WINDOW = 60.0
 _AGENT_TIMEOUT_SECONDS = 180
+_DIALOG_TURNS = 4
+_DIALOG_CHARS = 400
 
 
 class RegisterIn(BaseModel):
@@ -435,6 +432,20 @@ def _note(session: dict, text: str) -> dict:
     return _pack(session, text, [])
 
 
+def _dialog_messages(hist: list, current: str) -> list[dict]:
+    """Короткий хвост диалога + текущая фраза. Сверку сделки по-прежнему даёт этот ход."""
+    prior: list[dict] = []
+    for row in hist[:-1]:
+        role = str(row.get("role") or "")
+        content = str(row.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        prior.append({"role": role, "content": content[:_DIALOG_CHARS]})
+    prior = prior[-_DIALOG_TURNS:]
+    prior.append({"role": "user", "content": current})
+    return prior
+
+
 def _open_money_turn(session: dict, message: str) -> str | None:
     kind = utterance_class(message)
     if kind == "mixed":
@@ -482,19 +493,12 @@ async def _chat_locked(session: dict, body: ChatIn):
             deny_ticket(str(pending.get("id") or ""))
             return _note(session, "Заявка отменена, счёт не менялся.")
         return _note(session, "Открытой заявки нет.")
-    if is_sell_all(text):
-        payload = propose_sell_all()
-        return _note(session, str(payload.get("message") or payload.get("error") or "Заявка не создана."))
+    # Приказ не исполняется здесь. Агент сам вызывает тул.
+    # open_turn только записывает фразу, чтобы тул сверил бумагу и число.
+    agent_order = is_sell_all(text) or parse_transfer(text) is not None
     transfer = parse_transfer(text)
-    if transfer is not None:
-        if transfer.get("error"):
-            return _note(session, str(transfer["error"]))
-        amount = transfer["amount"]
-        if transfer.get("all"):
-            book = snapshot(session["email"])
-            amount = book["reserve_usd"] if transfer["source"] == "reserve" else book["cash_usd"]
-        payload = propose_transfer(transfer["source"], transfer["target"], float(amount or 0))
-        return _note(session, str(payload.get("message") or payload.get("error") or "Заявка не создана."))
+    if transfer is not None and transfer.get("error"):
+        return _note(session, str(transfer["error"]))
     several = several_companies(text)
     if several:
         return _note(session, several)
@@ -502,47 +506,16 @@ async def _chat_locked(session: dict, body: ChatIn):
     # «echo: купи Сбер» / «вызови ping» — к кастомному MCP, не в execute_buy.
     if user_mcp.has_allowed(session["email"]) and prefers_custom_mcp(text):
         intent = None
-    if intent is None and not user_mcp.has_allowed(session["email"]):
+        agent_order = False
+    if intent is None and not agent_order and not user_mcp.has_allowed(session["email"]):
         return _note(session, OFF_TOPIC_REPLY)
-    if intent in {"buy", "sell"}:
+    if intent in {"buy", "sell", "mixed"}:
         order = parse_order(text)
         if order.get("error"):
             return _note(session, str(order["error"]))
         mixed = _open_money_turn(session, text)
         if mixed:
             return _note(session, mixed)
-    # Покупку и продажу выполняет сервер по разобранной фразе.
-    # Маленькая qwen2.5:3b часто отвечает без execute_buy — тогда был бы NO_TOOL_REPLY.
-    if intent in {"buy", "sell"}:
-        order = parse_order(text)
-        ticker = str(order["ticker"])
-        shares = order.get("shares")
-        if intent == "buy":
-            raw = execute_buy(ticker, int(shares or 1))
-            used = ["execute_buy"]
-        else:
-            qty = int(shares) if shares is not None else 1
-            raw = execute_sell(ticker, qty)
-            used = ["execute_sell"]
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"status": "ERROR", "error": "Некорректный ответ инструмента."}
-        if not isinstance(payload, dict):
-            payload = {"status": "ERROR", "error": "Некорректный ответ инструмента."}
-        payload = dict(payload)
-        payload["_tool"] = used[0]
-        answer = compose_chat_reply(
-            model_text="",
-            used=used,
-            payloads=[payload],
-            snap=snapshot(session["email"]),
-            email=session["email"],
-            user_message=text,
-        )
-        if len(hist) > 40:
-            del hist[:-40]
-        return _pack(session, answer, used)
     if user_mcp.has_allowed(session["email"]) and (
         parse_custom_invoke(text) or prefers_wiki_mcp(text)
     ):
@@ -602,7 +575,7 @@ async def _chat_locked(session: dict, body: ChatIn):
     try:
         result = await asyncio.wait_for(
             agent.ainvoke(
-                {"messages": [{"role": "user", "content": agent_text}]},
+                {"messages": _dialog_messages(hist, agent_text)},
                 config={"recursion_limit": 12},
             ),
             timeout=_AGENT_TIMEOUT_SECONDS,
@@ -621,7 +594,10 @@ async def _chat_locked(session: dict, body: ChatIn):
                 "Агент остановился: слишком много шагов (часто из‑за prompt injection в MCP). "
                 "Повторите короче: «вызови export_portfolio_backup» или «вызови ping».",
             )
-        return _note(session, f"Агент не смог ответить ({name}). Повторите запрос.")
+        return _note(
+            session,
+            "Модель сейчас не ответила. Подождите полминуты и повторите запрос.",
+        )
     used = tools_used(result)
     acc = snapshot(session["email"])
     payloads = tool_json_payloads(result)

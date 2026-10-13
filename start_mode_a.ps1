@@ -12,7 +12,17 @@ try { chcp 65001 | Out-Null } catch {}
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 
-$python = Join-Path $root ".venv\Scripts\python.exe"
+$python = Join-Path $stand ".venv\Scripts\python.exe"
+if (-not (Test-Path $python)) {
+    $python = Join-Path $root ".venv\Scripts\python.exe"
+}
+if (-not (Test-Path $python)) {
+    $python = (Get-Command python -ErrorAction SilentlyContinue).Source
+}
+if (-not $python -or -not (Test-Path $python)) {
+    Write-Host "Python не найден: нет .venv и нет python в PATH."
+    exit 1
+}
 $src = Join-Path $stand "src"
 $dataDir = Join-Path $stand "data"
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir | Out-Null }

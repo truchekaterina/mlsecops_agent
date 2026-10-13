@@ -416,7 +416,8 @@ def execute_buy(ticker: str, shares: int) -> str:
 
     Сбер, сбера, сберу → SBER. Газпром → GAZP. Лукойл → LKOH. Норникель, норникеля → GMKN. Роснефть → ROSN. Яндекс → YDEX.
     «купи 4 акции сбера» → ticker=SBER, shares=4. Если число не названо, но бумага названа, shares = 1.
-    Тикер и число должны совпасть с фразой клиента. Иначе отказ, книгу не меняй. Любая сумма до кнопки — NEED_BUTTON.
+    «по цене 150 рублей» и «стоит 1500 ₽» — не число акций; штуки — «10 штук» / «10 акций». Цену всегда бери с Мосбиржи, не из фразы.
+    Тикер должен совпасть с фразой клиента. Число штук сервер возьмёт из фразы, если оно там есть. Иначе отказ, книгу не меняй. Любая сумма до кнопки — NEED_BUTTON.
     Нулевой резерв и выход из почты не повод отказывать: решит этот тул.
     Если денег на основном мало — не трогай резерв, верни NEED_RESERVE_CONFIRM. Покупку завершит кнопка, не слово «да».
     Новая фраза клиента — новый вызов, даже если такая покупка уже была.
@@ -441,7 +442,7 @@ def execute_buy(ticker: str, shares: int) -> str:
     if not email:
         return _no_client()
     if not _from_ticket():
-        conflict = policy.order_conflict(store.turn_phrase(email), ticker, shares)
+        shares, conflict = policy.apply_phrase_qty(store.turn_phrase(email), ticker, shares)
         if conflict:
             return _dump({"status": "ERROR", "error": conflict, "message": conflict})
         blocked = store.turn_block(email, "execute_buy")
@@ -631,7 +632,7 @@ def execute_sell(ticker: str, shares: int) -> str:
     if not email:
         return _no_client()
     if not _from_ticket():
-        conflict = policy.order_conflict(store.turn_phrase(email), ticker, shares)
+        shares, conflict = policy.apply_phrase_qty(store.turn_phrase(email), ticker, shares)
         if conflict:
             return _dump({"status": "ERROR", "error": conflict, "message": conflict})
     book = ledger.get_book(email)
@@ -765,13 +766,7 @@ def sell_all() -> str:
     if not email:
         return _no_client()
     if not _from_ticket():
-        return _dump(
-            {
-                "status": "ERROR",
-                "side": "SELL_ALL",
-                "error": "Продажа всего портфеля подтверждается кнопкой.",
-            }
-        )
+        return _dump(propose_sell_all())
     book = ledger.get_book(email)
     pending = book.get("pending_reserve") or {}
     prices = {str(k): float(v) for k, v in (pending.get("prices") or {}).items()}
@@ -979,6 +974,8 @@ def transfer_between_tool(source: str, target: str, amount: float) -> str:
         target: куда: cash или reserve
         amount: сумма в рублях
     """
+    if not _from_ticket():
+        return _dump(propose_transfer(source, target, amount))
     return _dump(transfer_between(source, target, amount))
 
 

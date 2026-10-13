@@ -7,4 +7,6 @@ fastmcp==3.4.8
 fastapi==0.143.0
 uvicorn==0.54.0
 argon2-cffi==25.1.0
+pydantic==2.11.7
+pydantic-core==2.33.2
 sqlcipher3==0.6.3

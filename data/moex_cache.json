@@ -1,53 +1,59 @@
 {
   "source": "iss.moex.com TQBR",
   "rows": {
+    "GAZP": {
+      "ticker": "GAZP",
+      "name": "Газпром",
+      "shortname": "ГАЗПРОМ ао",
+      "price": 103.48,
+      "source": "LAST",
+      "price_note": "последняя сделка",
+      "doubtful": false
+    },
     "SBER": {
       "ticker": "SBER",
       "name": "Сбербанк",
       "shortname": "Сбербанк",
-      "price": 280.48,
+      "price": 287.36,
       "source": "LAST",
-      "price_note": "последняя сделка"
-    },
-    "GMKN": {
-      "ticker": "GMKN",
-      "name": "Норникель",
-      "shortname": "ГМКНорНик",
-      "price": 115.2,
-      "source": "LAST",
-      "price_note": "последняя сделка"
-    },
-    "ROSN": {
-      "ticker": "ROSN",
-      "name": "Роснефть",
-      "shortname": "Роснефть",
-      "price": 346.3,
-      "source": "LAST",
-      "price_note": "последняя сделка"
+      "price_note": "последняя сделка",
+      "doubtful": false
     },
     "LKOH": {
       "ticker": "LKOH",
       "name": "Лукойл",
       "shortname": "ЛУКОЙЛ",
-      "price": 5608.0,
+      "price": 5995.5,
       "source": "LAST",
-      "price_note": "последняя сделка"
+      "price_note": "последняя сделка",
+      "doubtful": false
+    },
+    "GMKN": {
+      "ticker": "GMKN",
+      "name": "Норникель",
+      "shortname": "ГМКНорНик",
+      "price": 118.94,
+      "source": "LAST",
+      "price_note": "последняя сделка",
+      "doubtful": false
+    },
+    "ROSN": {
+      "ticker": "ROSN",
+      "name": "Роснефть",
+      "shortname": "Роснефть",
+      "price": 376.4,
+      "source": "LAST",
+      "price_note": "последняя сделка",
+      "doubtful": false
     },
     "YDEX": {
       "ticker": "YDEX",
       "name": "Яндекс",
       "shortname": "ЯНДЕКС",
-      "price": 3451.0,
+      "price": 3510.0,
       "source": "LAST",
-      "price_note": "последняя сделка"
-    },
-    "GAZP": {
-      "ticker": "GAZP",
-      "name": "Газпром",
-      "shortname": "ГАЗПРОМ ао",
-      "price": 96.25,
-      "source": "LAST",
-      "price_note": "последняя сделка"
+      "price_note": "последняя сделка",
+      "doubtful": false
     }
   }
 }

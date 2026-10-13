@@ -124,26 +124,76 @@ _NAME_PAPER = (
 )
 
 
+_MONEY_SPAN = re.compile(
+    r"\d+(?:[.,]\d+)?\s*(?:руб(?:л\w*)?|₽)|"
+    r"(?:руб(?:л\w*)?|₽)\s*\d+(?:[.,]\d+)?|"
+    r"(?:по\s+)?цен[аеуыи]\s+\d+(?:[.,]\d+)?|"
+    r"сто(?:ит|имост\w*)\s+\d+(?:[.,]\d+)?|"
+    r"(?:за|на)\s+\d+(?:[.,]\d+)?\s*(?:руб(?:л\w*)?|₽)",
+    re.IGNORECASE,
+)
+_QTY_AFTER = re.compile(r"(\d+)\s*(?:шт(?:ук\w*)?|акци\w*)", re.IGNORECASE)
+_QTY_BEFORE = re.compile(r"(?:шт(?:ук\w*)?|акци\w*)\s*(\d+)", re.IGNORECASE)
+_QTY_VERB = re.compile(
+    r"(?:куп\w*|капи|прода\w*)\s+(?:мне\s+|пожалуйста\s+)*(\d+)(?!\s*(?:руб|₽))",
+    re.IGNORECASE,
+)
+
+
+def _inside(pos: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in spans)
+
+
+def _money_spans(text: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.end()) for m in _MONEY_SPAN.finditer(text or "")]
+
+
+def _qty_digit_hits(low: str) -> list[tuple[int, int]]:
+    """Позиции и числа, которые выглядят как штуки, а не как рубли."""
+    money = _money_spans(low)
+    hits: list[tuple[int, int]] = []
+    for rx in (_QTY_AFTER, _QTY_BEFORE, _QTY_VERB):
+        for match in rx.finditer(low):
+            raw = next((g for g in match.groups() if g), None)
+            if raw is None:
+                continue
+            start = match.start(match.lastindex or 1)
+            if _inside(start, money):
+                continue
+            value = int(raw)
+            if value >= 1:
+                hits.append((start, value))
+    return hits
+
+
 def _share_count(text: str) -> tuple[int | None, str | None]:
-    """Число акций из фразы. Нет числа — одна штука. Дробь и ноль — отказ."""
+    """Число акций из фразы. Сумма в рублях и «цена 150» — не штуки.
+
+    Нет числа штук — одна акция. Дробь и ноль — отказ.
+    """
     low = (text or "").lower().replace("ё", "е")
-    digit_at: tuple[int, int] | None = None
-    match = _NUMBER.search(low)
-    if match:
-        raw = match.group(1).replace(",", ".")
-        value = float(raw)
-        if value != int(value) or int(value) < 1:
-            return None, "Нужно целое число акций, не меньше 1."
-        digit_at = (match.start(), int(value))
+    money = _money_spans(low)
+    qty_hits = _qty_digit_hits(low)
+    if qty_hits:
+        return qty_hits[-1][1], None
     word_at: tuple[int, int] | None = None
     for word, count in _SHARE_WORDS:
         found = re.search(rf"(?<!\w){word}(?!\w)", low)
         if found and (word_at is None or found.start() < word_at[0]):
             word_at = (found.start(), count)
-    if word_at and (digit_at is None or word_at[0] < digit_at[0]):
+    if word_at:
         return word_at[1], None
-    if digit_at:
-        return digit_at[1], None
+    leftover: list[tuple[int, int]] = []
+    for match in _NUMBER.finditer(low):
+        if _inside(match.start(), money):
+            continue
+        raw = match.group(1).replace(",", ".")
+        value = float(raw)
+        if value != int(value) or int(value) < 1:
+            return None, "Нужно целое число акций, не меньше 1."
+        leftover.append((match.start(), int(value)))
+    if leftover:
+        return leftover[0][1], None
     if re.search(
         r"(?<!\w)(?:одиннадцать|двенадцать|тринадцать|четырнадцать|пятнадцать|"
         r"шестнадцать|семнадцать|восемнадцать|девятнадцать|двадцать|тридцать|"
@@ -182,25 +232,40 @@ def order_conflict(phrase: str, ticker: str, shares: int) -> str | None:
 
     Пустая реплика — прямой вызов тула без чата, сверять не с чем.
     """
+    aligned, error = apply_phrase_qty(phrase, ticker, shares)
+    if error:
+        return error
+    if int(aligned) != int(shares):
+        return f"В сообщении названо {aligned} шт., а не {shares}. Книга не менялась."
+    return None
+
+
+def apply_phrase_qty(phrase: str, ticker: str, shares: int) -> tuple[int, str | None]:
+    """Тикер сверяем с фразой; число штук берём из фразы, не из цены в рублях.
+
+    Пустая реплика — аргументы тула как есть (прямой вызов).
+    """
     if not (phrase or "").strip():
-        return None
+        return int(shares), None
     order = parse_order(phrase)
     if order.get("error"):
-        return str(order["error"])
+        return int(shares), str(order["error"])
     wanted = str(order.get("ticker") or "")
     if wanted != ticker:
-        return f"В сообщении названа бумага {wanted}, а не {ticker}. Книга не менялась."
+        return int(shares), (
+            f"В сообщении названа бумага {wanted}, а не {ticker}. Книга не менялась."
+        )
     expected = order.get("shares")
-    if expected is None or int(expected) == int(shares):
-        return None
-    return f"В сообщении названо {expected} шт., а не {shares}. Книга не менялась."
+    if expected is None:
+        return int(shares), None
+    return int(expected), None
 
 
 def sell_all_of_ticker(text: str) -> str | None:
     """«Мои акции» одной компании без числа — весь этот пакет, не одна штука."""
     if utterance_class(text) != "sell" or is_sell_all(text):
         return None
-    if _NUMBER.search(text or ""):
+    if _qty_digit_hits((text or "").lower().replace("ё", "е")):
         return None
     low = (text or "").lower().replace("ё", "е")
     for word, _count in _SHARE_WORDS:
@@ -260,10 +325,38 @@ _CATALOG_BUY_STRIP = re.compile(
 )
 _RATES = re.compile(r"курс|валют|доллар|евро|юан", re.IGNORECASE)
 _ACCOUNT = re.compile(r"сч[её]т|баланс|сколько\s+денег|резерв", re.IGNORECASE)
+_QUOTE = re.compile(
+    r"сколько\s+сто(?:ит|ят)|"
+    r"поч[её]м|"
+    r"какая\s+цен[аы]|"
+    r"цен[аыу]\s+(?:акци|бумаг|сбер|газпром|лукойл|яндекс|норникел|роснефт)|"
+    r"котировк|"
+    r"стоимость\s+(?:акци|бумаг|сбер|газпром)|"
+    r"сколько\s+(?:акци|сбер|газпром)",
+    re.IGNORECASE,
+)
+
+# Домен брокера: не шаблон фразы, а что речь про бумаги, свой счёт или курс.
+# Какой тул звать, решает модель, не этот список.
+_BROKER_DOMAIN = re.compile(
+    r"акци|бумаг|тикер|котир|бирж|портфел|"
+    r"сч[её]т|баланс|резерв|остат|"
+    r"куп(?:и|ить|лю|им)|(?<!\w)капи(?!\w)|прода|"
+    r"курс|валют|доллар|евро|юан|"
+    r"каталог|лот(?:ах|ы|ов|\b)|"
+    r"денег|деньг|средств|"
+    r"на\s+руках|"
+    r"сколько\s+у\s+меня|"
+    r"руб(?:л|\b)|₽|"
+    r"сбер|газпром|лукойл|яндекс|норникел|роснефт|"
+    r"sber|gazp|lkoh|ydex|gmkn|rosn|"
+    r"перевод",
+    re.IGNORECASE,
+)
 
 OFF_TOPIC_REPLY = (
     "Это сообщение не отправляется модели. "
-    "Напишите покупку, продажу, счёт, портфель, список акций или курс валют."
+    "Напишите про свой счёт, портфель, акции или курс валют."
 )
 
 # Фразы к кастомному MCP, даже если внутри есть «купи Сбер».
@@ -328,12 +421,28 @@ def parse_custom_invoke(text: str) -> tuple[str, str] | None:
     return match.group(1), (match.group(2) or "").strip()
 
 
-def model_intent(text: str) -> str | None:
-    """Намерение, которое можно отдать модели. Остальное до неё не доходит.
+def in_broker_domain(text: str) -> bool:
+    """Фраза про бумаги, свой счёт, портфель или курс — не про погоду и не «кто ты»."""
+    raw = (text or "").lower().replace("ё", "е")
+    if not raw.strip():
+        return False
+    if _BROKER_DOMAIN.search(raw) or companies_in(text):
+        return True
+    if utterance_class(text) in {"buy", "sell", "mixed"}:
+        return True
+    if _CATALOG.search(raw) or _QUOTE.search(raw) or _PORTFOLIO.search(raw):
+        return True
+    if _RATES.search(raw) or _ACCOUNT.search(raw) or _TRANSFER.search(raw):
+        return True
+    return False
 
-    buy, sell и mixed разбирает utterance_class. Справка — только счёт,
-    портфель, каталог акций и курс. Чужой смысл вроде «кто ты» или арифметики
-    возвращает None, даже если в нём нет слов из story_block.
+
+def model_intent(text: str) -> str | None:
+    """Пускать к модели, если речь про брокерский контур. Тул выбирает агент.
+
+    buy/sell/mixed — чтобы тул сверил бумагу и штуки с фразой. Остальное
+    («сколько у меня», «почём лукойл», «что на руках») — broker: смысл тула
+    не зашит в регулярке. Чужой смысл вроде «кто ты» или арифметики — None.
     """
     raw = (text or "").lower().replace("ё", "е")
     if _CATALOG.search(raw):
@@ -343,12 +452,18 @@ def model_intent(text: str) -> str | None:
     kind = utterance_class(text)
     if kind in {"buy", "sell", "mixed"}:
         return kind
+    if _QUOTE.search(raw) or (
+        companies_in(text) and re.search(r"сто(?:ит|ят)|цен[аыуе]|котировк", raw)
+    ):
+        return "catalog"
     if _PORTFOLIO.search(raw):
         return "portfolio"
     if _RATES.search(raw):
         return "rates"
     if _ACCOUNT.search(raw):
         return "account"
+    if in_broker_domain(text):
+        return "broker"
     return None
 
 
