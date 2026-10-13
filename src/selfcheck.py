@@ -68,6 +68,22 @@ def check_auth() -> dict:
     return session
 
 
+def check_rate_limit() -> None:
+    print("=== Лимит писем (защита №4) ===")
+    import rate_limit
+
+    rate_limit.reset("rl-selfcheck@test")
+    for _ in range(rate_limit.MAIL_LIMIT):
+        rate_limit.check_mail("rl-selfcheck@test")
+    try:
+        rate_limit.check_mail("rl-selfcheck@test")
+    except rate_limit.RateLimitExceeded:
+        rate_limit.check_mail("rl-other@test")
+        print(f"  {rate_limit.MAIL_LIMIT}/{rate_limit.MAIL_WINDOW_SEC}с и чужой email — OK")
+        return
+    raise AssertionError("четвёртое check_mail должно быть Rate limit exceeded")
+
+
 def check_direct_tools(email: str) -> None:
     print("=== Прямые тулы MCP (без модели) ===")
     _reset_log()
@@ -123,6 +139,21 @@ def check_direct_tools(email: str) -> None:
     assert mail.get("message_id"), mail
     saved = list_messages(email)
     assert saved and saved[0]["email"] == email, saved
+    import inspect
+    import mail_client
+    import rate_limit
+
+    assert "email" not in inspect.signature(tools.notify_user).parameters
+    mail_client.reset_mail_limit(email)
+    for _ in range(rate_limit.MAIL_LIMIT):
+        note = json.loads(tools.notify_user("Тест системы"))
+        assert note["status"] == "SUCCESS", note
+        assert note.get("to") == email, note
+    blocked = json.loads(tools.notify_user("Тест системы"))
+    assert blocked["status"] == "ERROR", blocked
+    assert "Rate limit" in str(blocked.get("error") or blocked.get("message") or "")
+    after = list_messages(email)
+    assert len(after) == len(saved) + rate_limit.MAIL_LIMIT, (len(saved), len(after))
     kinds = _kinds()
     assert "BUY" in kinds and "SELL" in kinds and "RESERVE_ASK" in kinds and "ACCOUNT" in kinds, kinds
     snap = snapshot(email)
@@ -142,7 +173,7 @@ def check_direct_tools(email: str) -> None:
         other_snap = snapshot(other)
         assert other_snap["email"] == other
         assert other_snap["cash_usd"] != snap["cash_usd"]
-    print("  catalog / account / portfolio / buy / reserve / sell — OK")
+    print("  catalog / account / portfolio / buy / reserve / sell / notify_user limit — OK")
     print("  trades.log:", kinds)
     print("  smtp_ok:", mail.get("smtp_ok"))
 
@@ -158,6 +189,8 @@ async def check_agent(session: dict) -> None:
     assert "get_account" in names and "get_portfolio" in names
     assert "list_instruments" in names and "list_currencies" in names
     assert "get_rate" in names or "get_currency_rate" in names, names
+    assert "notify_user" in names
+    assert "send_trade_email" not in names
 
     prompts = [
         (
@@ -207,6 +240,7 @@ def main() -> None:
     session = check_auth()
     reset_book(session["email"])
     clear_history(session["email"])
+    check_rate_limit()
     check_direct_tools(session["email"])
     skip = os.environ.get("STRAZH_SKIP_AGENT", "").strip() in ("1", "true", "yes")
     if skip:

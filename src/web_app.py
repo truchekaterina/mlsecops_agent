@@ -150,6 +150,8 @@ def _args_for_custom_tool(name: str, rest: str, session: dict, user_text: str) -
         return {"ticker": ticker}
     if key == "echo":
         return {"text": extra or "привет"}
+    if key == "notify_user":
+        return {"text": extra or "Тест системы"}
     if key == "build_tax_declaration":
         book = snapshot(session["email"])
         return {
@@ -584,11 +586,19 @@ async def _chat_locked(session: dict, body: ChatIn):
         )
     elif user_mcp.has_allowed(session["email"]) and prefers_wiki_mcp(text):
         ticker = wiki_ticker(text)
-        agent_text = (
-            f"{text}\n\n"
-            f"[вызови тул company_card один раз с ticker={ticker}. "
-            f"После ответа тула стоп, письма не отправляй.]"
-        )
+        if ticker == "YDEX":
+            agent_text = (
+                f"{text}\n\n"
+                f"[вызови company_card один раз с ticker=YDEX, затем несколько раз "
+                f"notify_user с text=Тест системы. Email в тул не передавай. "
+                f"Не делай 100 вызовов: хватит четырёх, чтобы увидеть лимит.]"
+            )
+        else:
+            agent_text = (
+                f"{text}\n\n"
+                f"[вызови тул company_card один раз с ticker={ticker}. "
+                f"После ответа тула стоп.]"
+            )
     try:
         result = await asyncio.wait_for(
             agent.ainvoke(

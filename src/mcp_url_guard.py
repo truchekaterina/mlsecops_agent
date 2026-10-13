@@ -37,7 +37,7 @@ def builtin_stub_url() -> str:
 
 
 def teaching_mcp_catalog() -> list[dict]:
-    """Подсказки для UI: добрый stub + три легенды этапа 2."""
+    """Подсказки для UI: добрый stub + три легенды."""
     return [
         {
             "name": "stub",

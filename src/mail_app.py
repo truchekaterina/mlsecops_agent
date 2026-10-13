@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 import action_hash
 import mail_store
 import password_hash
+import rate_limit
 from api_schema import fastapi_kwargs
 from paths import STATIC
 
@@ -236,11 +237,29 @@ async def api_internal_check(body: LoginIn, request: Request):
     return {"ok": ok, "exists": True}
 
 
+_TRADE_SIDES = frozenset({"BUY", "SELL", "TRANSFER", "SELL_ALL"})
+
+
+@app.post("/api/internal/rate_reset")
+async def api_rate_reset(request: Request):
+    """Selfcheck: обнулить счётчик писем. Без X-Mail-Token — 403."""
+    _internal(request)
+    email = (request.query_params.get("email") or "").strip().lower()
+    rate_limit.reset(email or None)
+    return {"ok": True}
+
+
 @app.post("/api/internal/deliver")
 async def api_deliver(body: DeliverIn, request: Request):
     _internal(request)
     if not (body.confirmation_id or "").strip():
         raise HTTPException(400, "нужен номер сделки")
+    side_u = (body.side or "").upper().strip()
+    if side_u not in _TRADE_SIDES:
+        try:
+            rate_limit.check_mail(body.email)
+        except rate_limit.RateLimitExceeded as exc:
+            raise HTTPException(429, str(exc)) from exc
     try:
         row = mail_store.deliver(
             email=body.email,

@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 
 import action_hash
+import rate_limit
 
 MAIL_URL = os.environ.get("STRAZH_MAIL_URL", "http://127.0.0.1:8090").rstrip("/")
 
@@ -113,6 +114,18 @@ def deliver(
     )
     if status == 200:
         return payload
+    if status == 429:
+        raise rate_limit.RateLimitExceeded(email)
     if status == 404:
         raise ValueError(_detail(payload, "Такого ящика нет."))
     raise MailUnavailable(_detail(payload, "Почтовый сервис не принял письмо."))
+
+
+def reset_mail_limit(email: str | None = None) -> None:
+    """Сбросить счётчик защиты №4 в процессе почты (selfcheck)."""
+    path = "/api/internal/rate_reset"
+    if email:
+        path += "?email=" + urllib.parse.quote((email or "").strip().lower())
+    status, body = _call("POST", path, internal=True)
+    if status != 200:
+        raise MailUnavailable(_detail(body, "Не удалось сбросить лимит писем."))

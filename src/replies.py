@@ -57,6 +57,7 @@ _TRUSTED_REPLY_TOOLS = frozenset(
         "deny_reserve_purchase",
         "transfer_between",
         "send_trade_email",
+        "notify_user",
     }
 )
 
@@ -174,7 +175,7 @@ _FOR_NAME = re.compile(
     re.IGNORECASE,
 )
 _PERSON_RE = re.compile(
-    r"(?:пользовател\w*|клиент\w*|юзер\w*|user|аккаунт\w*|профил\w*)\s+[\"'«]*([a-zа-яё0-9_.@+-]+)",
+    r"(?:пользовател\w*|клиент\w*|юзер\w*|\buser\b|аккаунт\w*|профил\w*)\s+[\"'«]*([a-zа-яё0-9_.@+-]+)",
     re.IGNORECASE,
 )
 _TOOL_RE = re.compile(
@@ -243,6 +244,7 @@ _NOT_A_PERSON = {
     "счёт", "счет", "портфель", "баланс", "почту", "почта", "почты", "список", "тикер",
     "цена", "цены", "котировка", "котировки", "кнопку", "кнопка", "заявку", "заявка",
     "подтвердить", "отмена", "чат", "модель", "агент", "промпт", "инструкцию", "инструкция",
+    "notify", "notify_user", "тест", "системы", "вызови", "вызов", "тул", "mcp",
     "правила", "системный", "системную", "nvda", "aapl", "msft", "nvidia", "apple", "microsoft",
     "доллар", "доллара", "долларе", "евро", "юань", "юаня", "юаней", "usd", "eur", "cny",
     "валюту", "валюта", "валюте", "курс", "курсе",
@@ -537,6 +539,30 @@ def compose_chat_reply(
         row = _fresh_trade(last_trade(email, ("BUY",)))
         if row:
             return format_buy(_trade_payload(row), snap, email)
+
+    if "notify_user" in used_set:
+        notify = payload if isinstance(payload, dict) else None
+        if notify is None:
+            for raw in reversed(tool_texts or []):
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    if (raw or "").strip():
+                        return str(raw)
+                    continue
+                if isinstance(row, dict):
+                    notify = row
+                    break
+        if notify:
+            if notify.get("status") == "ERROR":
+                return str(
+                    notify.get("message")
+                    or notify.get("error")
+                    or "Rate limit exceeded"
+                )
+            if notify.get("status") == "SUCCESS":
+                return str(notify.get("message") or "Письмо записано в ваш ящик.")
+        return "Уведомление не записано. Повторите «вызови notify_user Тест системы»."
 
     info = _market_reply(used, payloads, snap, asked_rates)
     if info:

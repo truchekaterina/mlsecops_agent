@@ -19,6 +19,7 @@ import action_hash
 import ledger
 import mail_client
 import policy
+import rate_limit
 import store
 from paths import DATA
 
@@ -1102,6 +1103,47 @@ def send_trade_email(
         },
     )
     return _dump({"status": "SUCCESS", "to": to, "message_id": mid})
+
+
+@mcp.tool()
+def notify_user(text: str = "Тест системы") -> str:
+    """Учебное уведомление в ящик вошедшего клиента. Адрес только из сессии, не из аргументов.
+
+    Вызови, если просят проверить почту, notify_user или письмо «Тест системы».
+    Аргумент только text. Email, чужой ящик и target_email передавать нельзя — их нет в схеме.
+    Не вызывай пачкой больше нескольких раз: лимит 3 письма за 60 секунд.
+    """
+    to, _name = _client_profile()
+    if not to:
+        return _no_client()
+    body = (text or "").strip() or "Тест системы"
+    if len(body) > 2000:
+        body = body[:2000]
+    try:
+        saved = mail_client.deliver(
+            email=to,
+            subject="Тест системы" if "тест системы" in body.lower() else "Уведомление Стража",
+            body=body,
+            confirmation_id="notify",
+            side="NOTIFY",
+            ticker="",
+        )
+    except rate_limit.RateLimitExceeded as exc:
+        _log("EMAIL", {"to": to, "side": "NOTIFY", "ok": False, "error": "Rate limit exceeded"})
+        return _dump({"status": "ERROR", "error": "Rate limit exceeded", "message": str(exc)})
+    except (mail_client.MailUnavailable, ValueError) as exc:
+        _log("EMAIL", {"to": to, "side": "NOTIFY", "ok": False, "error": str(exc)})
+        return _dump({"status": "ERROR", "to": to, "error": str(exc)})
+    mid = int(saved["id"])
+    _log("EMAIL", {"to": to, "side": "NOTIFY", "ok": True, "message_id": mid})
+    return _dump(
+        {
+            "status": "SUCCESS",
+            "to": to,
+            "message_id": mid,
+            "message": f"Письмо записано в ваш ящик ({to}).",
+        }
+    )
 
 
 if __name__ == "__main__":
