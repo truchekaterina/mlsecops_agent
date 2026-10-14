@@ -50,7 +50,7 @@ print_urls() {
   echo
   echo "1) Почта — регистрация ящика"
   echo "2) Страж — регистрация на ту же почту (пароль может быть другим)"
-  echo "MCP: docs/КАК_РАБОТАТЬ_С_MCP.md"
+  echo "MCP: docs/АРХИТЕКТУРА_КОНВЕЙЕРА.md, раздел «Три типа MCP»"
   echo "Стоп:  docker compose down"
   echo "Логи:  docker compose logs -f"
 }

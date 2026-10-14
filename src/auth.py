@@ -1,6 +1,9 @@
-"""Учебный вход клиента: учётки в SQLite, JWT на 8 часов.
+"""Вход: учётка в strazh.db, пароль Argon2, cookie JWT на 8 часов.
 
-Адрес письма берём из сессии, не из текста чата.
+Кто вызывает: web_app.
+Кого вызывает: store, password_hash, ledger.ensure_account, mail_client.mailbox_exists.
+Почему отдельно: проверка пароля и токена не должна жить в обработчике чата.
+Адрес письма берётся из сессии, не из текста чата.
 """
 
 from __future__ import annotations

@@ -1,6 +1,14 @@
-"""Режим A: LangChain-агент без слоёв защиты.
+"""Модель хода. Книгу не пишет и цену не назначает.
 
-Модель сама вызывает MCP-тулы. Паника и номер счёта не фильтруются.
+Здесь три разных вызова Qwen, и это не один агент:
+- `classify_utterance` — одно слово темы, без тулов;
+- `converse_without_tools` — короткий разговор, без тулов и без книги;
+- `build_agent` — LangGraph, модель сама выбирает тул.
+
+Кого вызывает: user_mcp (чьи серверы подключать), langchain и Ollama.
+Кто вызывает: web_app.
+Почему отдельно от policy: правила фразы не должны зависеть от модели.
+Почему отдельно от mcp_strazh: модель не импортирует книгу, она только называет тул.
 """
 
 from __future__ import annotations
@@ -90,6 +98,7 @@ _RESERVED_TOOL_NAMES = frozenset(
 
 
 def _system_prompt(session: dict | None, custom_tools: list[tuple[str, str]] | None = None) -> str:
+    """Текст для модели. Тулы денег здесь не исполняются: их потом сверяет сервер."""
     specs = [(name, desc) for name, desc in (custom_tools or []) if name]
     if not specs:
         return SYSTEM
@@ -131,6 +140,7 @@ def _safe_server_id(name: str, index: int) -> str:
 
 
 async def build_agent(session: dict | None = None):
+    """Собирает агента сессии: тулы Стража, курсы ЦБ и MCP только этого email."""
     from user_mcp import list_allowed
 
     cbr_bin, cbr_args = _cbr_command()
@@ -339,6 +349,7 @@ async def converse_without_tools(text: str, earlier: str = "") -> str:
 
 
 def last_text(result: dict) -> str:
+    """Последняя реплика модели. Ответы тулов сюда не входят."""
     msgs = result.get("messages") or []
     if not msgs:
         return ""
@@ -382,6 +393,7 @@ def rate_codes(result: dict) -> list[str]:
 
 
 def tools_used(result: dict) -> list[str]:
+    """Имена тулов, которые модель вызвала в этом ходе. Пишутся в журнал TOOLS."""
     names: list[str] = []
     for msg in result.get("messages") or []:
         calls = getattr(msg, "tool_calls", None) or []

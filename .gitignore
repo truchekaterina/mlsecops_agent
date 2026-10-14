@@ -11,6 +11,7 @@ mail.db
 mail.db-wal
 mail.db-shm
 data/trades.log
+data/smoke_cookies.txt
 data/session.json
 data/jwt_secret
 data/mail_secret

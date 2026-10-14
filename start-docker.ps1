@@ -51,7 +51,7 @@ function Write-Urls {
     Write-Host ""
     Write-Host "1) Почта — регистрация ящика"
     Write-Host "2) Страж — регистрация на ту же почту (пароль может быть другим)"
-    Write-Host "MCP: docs/КАК_РАБОТАТЬ_С_MCP.md"
+    Write-Host "MCP: docs/АРХИТЕКТУРА_КОНВЕЙЕРА.md, раздел «Три типа MCP»"
     Write-Host "Стоп:  docker compose down"
     Write-Host "Логи:  docker compose logs -f"
 }

@@ -37,15 +37,6 @@
       "price_note": "последняя сделка",
       "doubtful": false
     },
-    "ROSN": {
-      "ticker": "ROSN",
-      "name": "Роснефть",
-      "shortname": "Роснефть",
-      "price": 377.35,
-      "source": "LAST",
-      "price_note": "последняя сделка",
-      "doubtful": false
-    },
     "YDEX": {
       "ticker": "YDEX",
       "name": "Яндекс",

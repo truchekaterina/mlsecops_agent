@@ -1,4 +1,10 @@
-"""Класс реплики до модели. Деньги сверяются с этим классом, не с текстом ответа."""
+"""Правила фразы. Сети и базы здесь нет: только текст.
+
+Кто вызывает: web_app до модели и mcp_strazh, когда сверяет бумагу с фразой.
+Кого вызывает: никого из стенда.
+Почему отдельно от replies: здесь решается, можно ли идти дальше,
+а replies уже собирает текст, который увидит человек.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ _NAME = re.compile(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё \-]{0,79}\Z")
 
 
 def clean_name(name: str) -> str:
+    """Имя при регистрации: без управляющих символов и не длиннее шаблона."""
     text = "".join(ch for ch in (name or "") if ch >= " " and ch != "\x7f").strip()
     if not text or _NAME.fullmatch(text) is None:
         raise ValueError("Имя — буквы, пробел и дефис, до 80 знаков.")
@@ -51,14 +58,17 @@ def story_block(text: str) -> str | None:
 
 
 def is_yes(text: str) -> bool:
+    """Сообщение из одного слова «да». Сделку не подтверждает."""
     return _YES.fullmatch(text or "") is not None
 
 
 def is_no(text: str) -> bool:
+    """Сообщение «нет» или «отмена». Снимает заявку, деньги не двигает."""
     return _NO.fullmatch(text or "") is not None
 
 
 def is_sell_all(text: str) -> bool:
+    """Продажа всего портфеля. Это не приказ на одну бумагу."""
     return _SELL_ALL.search(text or "") is not None
 
 
@@ -81,6 +91,7 @@ _COMPANY_HINTS = (
 
 
 def companies_in(text: str) -> set[str]:
+    """Тикеры, названные в фразе словами или кодами. Альфа в каталоге нет."""
     low = (text or "").lower().replace("ё", "е")
     found: set[str] = set()
     for hint, code in _COMPANY_HINTS:
@@ -581,6 +592,7 @@ def recover_layout(text: str) -> tuple[str | None, str | None]:
 
 
 def parse_transfer(text: str) -> dict | None:
+    """Перевод между основным счётом и резервом. None — это не перевод."""
     raw = text or ""
     if _TRANSFER.search(raw) is None:
         return None
@@ -603,10 +615,12 @@ def parse_transfer(text: str) -> dict | None:
 
 
 def expires_at() -> str:
+    """Срок заявки: три минуты от текущего момента."""
     return (datetime.now(timezone.utc) + timedelta(seconds=TICKET_SECONDS)).isoformat()
 
 
 def ticket_alive(expires_at_value: str) -> bool:
+    """Заявка ещё не протухла. Пустая или битая дата — нет."""
     raw = str(expires_at_value or "")
     try:
         ts = datetime.fromisoformat(raw)

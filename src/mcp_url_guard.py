@@ -1,4 +1,9 @@
-"""Проверка URL кастомного MCP: анти-SSRF к localhost и metadata."""
+"""Адрес чужого MCP до сохранения. Loopback и metadata запрещены.
+
+Исключение — учебные http://127.0.0.1:9100–9103/mcp.
+Кто вызывает: user_mcp.add_mcp.
+Почему отдельно: правило адреса не должно смешиваться с вызовом тула.
+"""
 
 from __future__ import annotations
 

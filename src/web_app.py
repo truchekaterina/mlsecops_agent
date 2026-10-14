@@ -1,7 +1,15 @@
-"""Веб-сервис Стража: регистрация любого клиента + чат LangChain.
+"""HTTP Стража: страница чата и /api/*. Книгу этот файл не пишет.
 
-Агент: langchain.agents.create_agent (LangGraph ReAct).
-Тулы: MCP (strazh-mcp + ЦБ). Письма — на почту из JWT, не из чата.
+Одна фраза в `_chat_locked` идёт так:
+1. `policy` отсекает номер, чужое имя, «да», «нет» и подмену остатка.
+2. Вопрос про цену отвечает `replies.format_exchange_quotes`, модель тут не гадает.
+3. Иначе `agent_mode_a` выбирает тул.
+4. `replies.compose_chat_reply` собирает пузырь из книги, не из пересказа.
+5. Кнопка `/api/reserve/confirm` вызывает `mcp_strazh.confirm_ticket`.
+
+Кого вызывает: policy, agent_mode_a, replies, ledger.snapshot, store, user_mcp.
+Кто вызывает: страница static/index.html и chat_cli.py.
+Почему отдельно от mcp_strazh: веб не должен сам списывать деньги.
 """
 
 from __future__ import annotations
@@ -149,16 +157,19 @@ async def _readable_external(
 
 
 def _bind_client(session: dict) -> None:
+    """Кладёт почту входа в процесс MCP, чтобы тул не брал адрес из фразы."""
     set_client(session["email"], session["name"])
     os.environ["STRAZH_CLIENT_EMAIL"] = session["email"]
     os.environ["STRAZH_CLIENT_NAME"] = session["name"]
 
 
 def _fresh_chat(email: str) -> None:
+    """Сбрасывает память диалога в процессе. Книгу в базе не трогает."""
     _history[email] = []
 
 
 def _pack(session: dict, text: str, tools: list[str]) -> dict:
+    """Ответ чата: текст, снимок книги и заявка. Поля tools в JSON нет."""
     acc = snapshot(session["email"])
     if tools:
         _log("TOOLS", {"tools": list(tools)})
@@ -374,6 +385,7 @@ async def _drop_agent(email: str) -> None:
 
 
 async def _agent_for(session: dict):
+    """Один агент на email. Чужие MCP в него не попадают: список берётся из сессии."""
     key = session["email"]
     async with _lock:
         if key not in _agents:
@@ -384,6 +396,7 @@ async def _agent_for(session: dict):
 
 
 def _note(session: dict, text: str) -> dict:
+    """Кладёт ответ сервера в память диалога. В книгу не пишет."""
     hist = _history.setdefault(session["email"], [])
     hist.append({"role": "assistant", "content": text})
     return _pack(session, text, [])
@@ -411,6 +424,7 @@ def _prior_rows(hist: list) -> list[dict]:
 
 
 def _earlier_user_lines(hist: list) -> str:
+    """Только реплики клиента, без ответов. Их видят классификатор и ответ без тулов."""
     lines = [row["content"] for row in _prior_rows(hist) if row["role"] == "user"]
     return "\n".join(lines)
 
@@ -431,6 +445,7 @@ async def _say(session: dict, user_text: str) -> dict:
 
 
 def _open_money_turn(session: dict, message: str) -> str | None:
+    """Запоминает фразу покупки или продажи. Тул вызовет агент и сверит бумагу с ней."""
     kind = utterance_class(message)
     if kind == "mixed":
         return "В одном сообщении можно одну покупку или одну продажу."
@@ -445,12 +460,14 @@ async def api_transfer(body: TicketIn, request: Request):
 
 @app.post("/api/chat")
 async def api_chat(body: ChatIn, request: Request):
+    """Единственный вход фразы. Второй запрос того же человека ждёт первый."""
     session = _bearer(request)
     async with await _hold_user(session["email"]):
         return await _chat_locked(session, body)
 
 
 async def _chat_locked(session: dict, body: ChatIn):
+    """Конвейер фразы: фильтр, цена с биржи либо агент, затем текст из книги."""
     _bind_client(session)
     hist = _history.setdefault(session["email"], [])
     text = body.message.strip()

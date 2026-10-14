@@ -1,4 +1,8 @@
-"""Публичная схема API выключена. Для локальной разработки её включает STRAZH_OPENAPI."""
+"""Выключает /docs, /redoc и /openapi.json, пока нет STRAZH_OPENAPI=1.
+
+Кто вызывает: web_app и mail_app при создании FastAPI.
+Почему отдельно: оба HTTP-процесса должны закрывать схему одним способом.
+"""
 
 from __future__ import annotations
 
