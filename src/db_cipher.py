@@ -1,8 +1,8 @@
-"""Открытие strazh.db и mail.db ключом SQLCipher. Сами таблицы здесь не создаются.
+"""Открытие файлов SQLCipher. Сами таблицы здесь не создаются.
 
-Кто вызывает: store и mail_store.
-Почему отдельно: один и тот же способ закрыть файл нужен двум базам,
-а схемы у них разные.
+Кто вызывает: store, mail_store и audit_journal.
+Почему отдельно: один и тот же способ закрыть файл нужен нескольким базам,
+а схемы и ключи у них разные.
 """
 
 from __future__ import annotations
@@ -31,14 +31,14 @@ def db_secret() -> str:
     return value
 
 
-def connect(path: Path) -> Connection:
-    secret = db_secret()
+def connect(path: Path, *, secret: str | None = None) -> Connection:
+    key = secret if secret is not None else db_secret()
     _owner_only()
     path.parent.mkdir(parents=True, exist_ok=True)
-    _seal_if_plaintext(path, secret)
+    _seal_if_plaintext(path, key)
     conn = sqlcipher.connect(str(path), timeout=15, check_same_thread=False)
     conn.row_factory = sqlcipher.Row
-    conn.execute(f"PRAGMA key = {_quote(secret)}")
+    conn.execute(f"PRAGMA key = {_quote(key)}")
     try:
         conn.execute("SELECT count(*) FROM sqlite_master")
     except sqlcipher.DatabaseError as exc:

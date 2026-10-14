@@ -16,6 +16,9 @@ data/session.json
 data/jwt_secret
 data/mail_secret
 data/db_secret
+data/audit_secret
+data/audit/
+data/tls/
 data/*.sealed
 data/*.seal.lock
 data/ledgers.json

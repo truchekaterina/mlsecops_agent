@@ -14,9 +14,11 @@ import urllib.error
 import urllib.request
 from http.cookiejar import CookieJar
 
+from tls_cert import CERT, client_context
+
 
 def web_base() -> str:
-    return os.environ.get("STRAZH_WEB_URL", "http://127.0.0.1:8080").rstrip("/")
+    return os.environ.get("STRAZH_WEB_URL", "https://127.0.0.1:8080").rstrip("/")
 
 
 def ticket_action(word: str) -> str | None:
@@ -39,7 +41,10 @@ def ticket_path(action: str) -> str:
 class Client:
     def __init__(self, base: str | None = None):
         self.base = (base or web_base()).rstrip("/")
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
+        handlers = [urllib.request.HTTPCookieProcessor(CookieJar())]
+        if self.base.startswith("https://") and CERT.is_file():
+            handlers.append(urllib.request.HTTPSHandler(context=client_context()))
+        self.opener = urllib.request.build_opener(*handlers)
 
     def post(self, path: str, body: dict, timeout: float = 30) -> tuple[int, dict]:
         req = urllib.request.Request(
@@ -92,7 +97,7 @@ def _ask(prompt: str) -> str:
 
 def authorize(client: Client) -> dict:
     print("Вход в учебный стенд «Страж». Без логина чат закрыт.")
-    print("Сначала ящик на http://127.0.0.1:8090, потом регистрация в Страже на ту же почту (пароль можно другой).")
+    print("Сначала ящик на https://127.0.0.1:8090, потом регистрация в Страже на ту же почту (пароль можно другой).")
     print()
     for _attempt in range(5):
         ident = _ask("Email или имя: ")
@@ -140,7 +145,7 @@ def main() -> None:
     session = authorize(client)
     print()
     print(f"Вошли: {session.get('name')} <{session.get('email')}>")
-    print("Письма о покупке/продаже — в вашем ящике: http://127.0.0.1:8090")
+    print("Письма о покупке/продаже — в вашем ящике: https://127.0.0.1:8090")
     print(f"Фразы идут на тот же адрес, что страница: {client.base}/api/chat")
     print("Заявка подтверждается словом «подтвердить», не словом «да».")
     print("Выход: пустая строка или Ctrl+C.")

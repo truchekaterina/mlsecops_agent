@@ -12,9 +12,14 @@ import os
 
 
 def _strazh_secret() -> str:
-    import store
-
-    return store.get_secret()
+    """Ключ журнала берётся из окружения, не из учебной строки в коде."""
+    value = (os.environ.get("STRAZH_JWT_SECRET") or "").strip()
+    if len(value) < 16 or value == "strazh-demo-hs256":
+        raise RuntimeError(
+            "Задайте STRAZH_JWT_SECRET длиннее учебной константы. "
+            "Журнал не подставляет секрет из кода."
+        )
+    return value
 
 
 def mail_secret() -> str:

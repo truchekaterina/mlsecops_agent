@@ -7,9 +7,9 @@ cd "$(dirname "$0")"
 
 health_ok() {
   if command -v curl >/dev/null 2>&1; then
-    curl -sf http://127.0.0.1:38480/api/health >/dev/null 2>&1
+    curl -sfk https://127.0.0.1:38480/api/health >/dev/null 2>&1
   else
-    python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:38480/api/health', timeout=2)" >/dev/null 2>&1
+    python3 -c "import ssl,urllib.request; c=ssl._create_unverified_context(); urllib.request.urlopen('https://127.0.0.1:38480/api/health', context=c, timeout=2)" >/dev/null 2>&1
   fi
 }
 
@@ -30,16 +30,17 @@ lan_ipv4() {
 print_urls() {
   echo
   echo "У этого компьютера:"
-  echo "  Страж:  http://127.0.0.1:38480"
-  echo "  Почта:  http://127.0.0.1:38490"
+  echo "  Страж:  https://127.0.0.1:38480"
+  echo "  Почта:  https://127.0.0.1:38490"
+  echo "  Сертификат самоподписанный: браузер один раз спросит доверие."
   echo
   ips="$(lan_ipv4 || true)"
   if [ -n "${ips}" ]; then
     echo "Одногруппникам в той же Wi‑Fi (скопируйте как есть):"
     while read -r ip; do
       [ -n "$ip" ] || continue
-      echo "  Страж:  http://${ip}:38480"
-      echo "  Почта:  http://${ip}:38490"
+      echo "  Страж:  https://${ip}:38480"
+      echo "  Почта:  https://${ip}:38490"
     done <<< "${ips}"
     echo
     echo "IP выдаёт Wi‑Fi (DHCP), порты всегда 38480 и 38490."
@@ -57,7 +58,7 @@ print_urls() {
 
 if [ "${1:-}" = "urls" ]; then
   if ! health_ok; then
-    echo "Стенд не отвечает на http://127.0.0.1:38480/api/health" >&2
+    echo "Стенд не отвечает на https://127.0.0.1:38480/api/health" >&2
     echo "Сначала: ./start-docker.sh" >&2
     exit 1
   fi
@@ -75,13 +76,14 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
+export STRAZH_TLS_IPS="$(lan_ipv4 | paste -sd, - || true)"
 echo "Собираю образ и поднимаю стек."
 echo "Первый раз качает qwen2.5:3b (~2 ГБ) — это может занять 5–15 минут."
 # Без --wait: у compose по умолчанию 60 с, а pull модели длиннее.
 # depends_on ollama-pull (completed) всё равно удерживает up, пока модель не скачается.
 docker compose up -d --build
 
-echo "Жду http://127.0.0.1:38480/api/health ..."
+echo "Жду https://127.0.0.1:38480/api/health ..."
 ok=0
 for _ in $(seq 1 300); do
   if health_ok; then

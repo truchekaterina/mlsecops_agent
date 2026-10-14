@@ -258,6 +258,7 @@
           или IP в сети, не <code>127.0.0.1</code>.
           Учебные порты <code>9100–9103</code> — исключение, путь <code>/mcp</code>.
           Transport: <code>streamable_http</code>.
+          Если сервер сменит список команд, модель их не увидит, пока не нажмёте «Подтвердить команды».
           Чтобы вернуться в чат — <strong>«← К чату»</strong> (не «Выйти»).
         </p>
         <h3>Учебные MCP (уже в контейнере):</h3>
@@ -435,23 +436,53 @@
         head.className = "mcp-head";
         const left = document.createElement("div");
         const title = document.createElement("strong");
-        title.textContent = item.name + " · " + (item.status || "");
+        const statusText = item.status === "review" ? "ждёт подтверждения" : "подключён";
+        title.textContent = item.name + " · " + statusText;
         const meta = document.createElement("div");
         meta.className = "meta";
         meta.textContent = (item.transport || "") + " · " + (item.url || "");
+        if (item.status === "review") {
+          const wait = document.createElement("div");
+          wait.className = "meta";
+          wait.textContent = "Команды изменились. Модель их не вызывает, пока вы не подтвердите.";
+          meta.appendChild(wait);
+        }
         left.appendChild(title);
         left.appendChild(meta);
+        const actions = document.createElement("div");
+        actions.className = "row-inline";
+        if (item.status === "review") {
+          const confirm = document.createElement("button");
+          confirm.type = "button";
+          confirm.textContent = "Подтвердить команды";
+          confirm.onclick = () => confirmMcp(item.name);
+          actions.appendChild(confirm);
+        }
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "ghost";
         btn.textContent = "Отключить";
         btn.onclick = () => removeMcp(item.name);
+        actions.appendChild(btn);
         head.appendChild(left);
-        head.appendChild(btn);
+        head.appendChild(actions);
         li.appendChild(head);
         list.appendChild(li);
         fillMcpCommands(li, item.name);
       }
+    }
+
+    async function confirmMcp(name) {
+      document.getElementById("mcp-err").textContent = "";
+      document.getElementById("mcp-ok").textContent = "";
+      const r = await api("/api/mcp/" + encodeURIComponent(name) + "/confirm", { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById("mcp-err").textContent = fmtErr(data, "Не удалось подтвердить команды");
+        return;
+      }
+      document.getElementById("mcp-ok").textContent = "Команды подтверждены. Можно вернуться в чат.";
+      loadMcpList();
     }
 
     async function removeMcp(name) {

@@ -71,11 +71,31 @@ if ($dbSecret.Length -lt 16) {
     exit 1
 }
 $env:STRAZH_DB_SECRET = $dbSecret
+$auditSecretFile = Join-Path $dataDir "audit_secret"
+$auditSecret = ""
+if ($env:STRAZH_AUDIT_SECRET) { $auditSecret = $env:STRAZH_AUDIT_SECRET.Trim() }
+if (-not $auditSecret -and (Test-Path $auditSecretFile)) {
+    $auditSecret = (Get-Content -Raw -Path $auditSecretFile).Trim()
+}
+if (-not $auditSecret) {
+    $auditBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($auditBytes)
+    $auditSecret = [Convert]::ToBase64String($auditBytes)
+    Set-Content -Path $auditSecretFile -Value $auditSecret -NoNewline -Encoding ascii
+}
+if ($auditSecret.Length -lt 16) {
+    Write-Host "STRAZH_AUDIT_SECRET короче 16 символов. Журнал не стартует."
+    exit 1
+}
+$env:STRAZH_AUDIT_SECRET = $auditSecret
+$env:STRAZH_MAIL_URL = "https://127.0.0.1:8090"
+$sslLine = & $python -c "import sys; sys.path.insert(0, r'$src'); from tls_cert import uvicorn_ssl_args; print(' '.join(uvicorn_ssl_args()))"
+$sslArgs = $sslLine -split ' '
 
-Start-Process -FilePath $python -ArgumentList @(
+Start-Process -FilePath $python -ArgumentList (@(
     "-m", "uvicorn", "mail_app:app", "--host", "127.0.0.1", "--port", "8090"
-) -WorkingDirectory $src -WindowStyle Hidden
-Write-Host "Почта:   http://127.0.0.1:8090"
+) + $sslArgs) -WorkingDirectory $src -WindowStyle Hidden
+Write-Host "Почта:   https://127.0.0.1:8090"
 
 if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath "$ollamaDir\ollama.exe" -ArgumentList "serve" -WindowStyle Hidden
@@ -84,17 +104,11 @@ if (-not (Get-Process ollama -ErrorAction SilentlyContinue)) {
 
 $bind = "127.0.0.1"
 if ($env:STRAZH_BIND) { $bind = $env:STRAZH_BIND.Trim() }
-$webArgs = @("-m", "uvicorn", "web_app:app", "--host", $bind, "--port", "8080")
-if (@("127.0.0.1", "localhost", "::1") -notcontains $bind) {
-    if (-not $env:STRAZH_SSL_CERTFILE -or -not $env:STRAZH_SSL_KEYFILE) {
-        Write-Host "Для показа не на этом компьютере задайте STRAZH_SSL_CERTFILE и STRAZH_SSL_KEYFILE."
-        exit 1
-    }
-    $webArgs += @("--ssl-certfile", $env:STRAZH_SSL_CERTFILE, "--ssl-keyfile", $env:STRAZH_SSL_KEYFILE)
-}
+$webArgs = @("-m", "uvicorn", "web_app:app", "--host", $bind, "--port", "8080") + $sslArgs
 
 Write-Host "Сервис Стража (LangChain create_agent)."
-Write-Host "Откройте в браузере:  http://127.0.0.1:8080"
+Write-Host "Откройте в браузере:  https://127.0.0.1:8080"
+Write-Host "Сертификат самоподписанный: браузер один раз спросит доверие."
 Write-Host "Сначала ящик на :8090, потом регистрация в Страже на эту почту."
 Set-Location $src
 & $python @webArgs

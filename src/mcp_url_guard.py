@@ -1,7 +1,8 @@
-"""Адрес чужого MCP до сохранения. Loopback и metadata запрещены.
+"""Адрес чужого MCP. Loopback и metadata запрещены.
 
 Исключение — учебные http://127.0.0.1:9100–9103/mcp.
-Кто вызывает: user_mcp.add_mcp.
+Порты Стража и почты, 8080 и 8090, не сохраняются и не вызываются.
+Кто вызывает: user_mcp.add_mcp и повторно mcp_custom_guard перед вызовом.
 Почему отдельно: правило адреса не должно смешиваться с вызовом тула.
 """
 
@@ -22,6 +23,8 @@ _BLOCKED_HOSTS = {
 # Учебные MCP внутри контейнера (entrypoint): stub + три злых легенды.
 _TEACHING_MCP_PORTS = frozenset({9100, 9101, 9102, 9103})
 _TEACHING_MCP_PATH = "/mcp"
+# Свои HTTP-сервисы. Чужой MCP не должен открывать чат или почту.
+_OWN_SERVICE_PORTS = frozenset({8080, 8090})
 
 
 def is_builtin_mcp_stub_url(url: str) -> bool:
@@ -112,6 +115,8 @@ def assert_safe_mcp_url(url: str) -> str:
     port = parsed.port
     if port is None:
         port = 443 if scheme == "https" else 80
+    if port in _OWN_SERVICE_PORTS:
+        raise ValueError("Порты 8080 и 8090 как MCP не сохраняются.")
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror:

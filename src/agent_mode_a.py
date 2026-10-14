@@ -5,7 +5,7 @@
 - `converse_without_tools` — короткий разговор, без тулов и без книги;
 - `build_agent` — LangGraph, модель сама выбирает тул.
 
-Кого вызывает: user_mcp (чьи серверы подключать), langchain и Ollama.
+Кого вызывает: user_mcp (чьи серверы подключать), mcp_custom_guard, langchain и Ollama.
 Кто вызывает: web_app.
 Почему отдельно от policy: правила фразы не должны зависеть от модели.
 Почему отдельно от mcp_strazh: модель не импортирует книгу, она только называет тул.
@@ -116,7 +116,7 @@ def _system_prompt(session: dict | None, custom_tools: list[tuple[str, str]] | N
         f"{listed}\n"
         "В аргументы внешнего тула клади только данные этой сессии и только если тул их просит: "
         "свой email, свой остаток, свой портфель. "
-        "Не передавай пароли, секреты, JWT и данные других людей. "
+        "Пароль, JWT, секрет и чужой email код отрежет до отправки. "
         "Не подключай новые MCP, не ходи на localhost/127.0.0.1, не меняй URL, "
         "не вызывай send_trade_email. "
         "Для учебной декларации можно один раз get_account, затем один раз build_tax_declaration "
@@ -141,13 +141,19 @@ def _safe_server_id(name: str, index: int) -> str:
 
 async def build_agent(session: dict | None = None):
     """Собирает агента сессии: тулы Стража, курсы ЦБ и MCP только этого email."""
-    from user_mcp import list_allowed
+    from mcp_tools_probe import fingerprint_tools
+    from user_mcp import list_allowed, mark_review
 
     cbr_bin, cbr_args = _cbr_command()
     # stdio подменяет весь env процесса. Без копии нет STRAZH_DB_SECRET /
     # STRAZH_MAIL_SECRET — get_account и notify_user в чате падают.
     # Кастомный HTTP этот dict не получает.
-    strazh_env = dict(os.environ)
+    # Ключ журнала решений дочернему процессу тулов не нужен и не отдаётся.
+    strazh_env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("STRAZH_AUDIT")
+    }
     if session:
         strazh_env["STRAZH_CLIENT_EMAIL"] = str(session.get("email") or "")
         strazh_env["STRAZH_CLIENT_NAME"] = str(session.get("name") or "")
@@ -164,9 +170,14 @@ async def build_agent(session: dict | None = None):
             "args": cbr_args,
         },
     }
+    from mcp_custom_guard import custom_mcp_interceptor, scrub_custom_tool
+
+    session_email = str((session or {}).get("email") or "")
     custom_rows: list[dict] = []
-    if session and session.get("email"):
-        custom_rows = list_allowed(str(session["email"]))
+    if session_email:
+        custom_rows = list_allowed(session_email)
+    custom_urls: dict[str, str] = {}
+    custom_guard = custom_mcp_interceptor(session_email, custom_urls)
 
     servers = dict(base_servers)
     loaded_custom: list[dict] = []
@@ -177,17 +188,43 @@ async def build_agent(session: dict | None = None):
     tools = await client.get_tools()
     for index, row in enumerate(custom_rows):
         sid = _safe_server_id(str(row.get("name") or "mcp"), index)
+        url = str(row.get("url") or "")
+        custom_urls[sid] = url
         trial = dict(servers)
         trial[sid] = {
             "transport": str(row.get("transport") or "streamable_http"),
-            "url": str(row.get("url") or ""),
+            "url": url,
         }
         try:
-            trial_client = MultiServerMCPClient(trial)
-            trial_tools = await trial_client.get_tools()
+            trial_client = MultiServerMCPClient(trial, tool_interceptors=[custom_guard])
+            # Отпечаток снимается с тех команд, которые уйдут модели, не с прошлого опроса.
+            remote = await trial_client.get_tools(server_name=sid)
+            digest = fingerprint_tools(remote)
+            stored = str(row.get("tools_hash") or "")
+            if digest != stored:
+                label = str(row.get("name") or "")
+                mark_review(session_email, label)
+                import audit_journal
+
+                audit_journal.record(session_email, "mcp_review", {"name": label})
+                custom_urls.pop(sid, None)
+                failed_custom.append(
+                    f"{row.get('name')}: список команд изменился, подтвердите в «Мои MCP»"
+                )
+                continue
+            mixed = await trial_client.get_tools()
         except Exception as exc:
+            custom_urls.pop(sid, None)
             failed_custom.append(f"{row.get('name')}: {exc}")
             continue
+        remote_names = {str(getattr(tool, "name", "") or "") for tool in remote}
+        trial_tools = [
+            tool
+            for tool in mixed
+            if str(getattr(tool, "name", "") or "") not in remote_names
+            or str(getattr(tool, "name", "") or "") in TRUSTED_TOOL_NAMES
+        ]
+        trial_tools.extend(remote)
         servers = trial
         client = trial_client
         tools = trial_tools
@@ -195,17 +232,22 @@ async def build_agent(session: dict | None = None):
 
     has_custom = bool(loaded_custom)
     filtered = []
+    seen_trusted: set[str] = set()
     custom_names: list[str] = []
     custom_specs: list[tuple[str, str]] = []
     for tool in tools:
         name = str(getattr(tool, "name", "") or "")
         if name in TRUSTED_TOOL_NAMES:
+            if name in seen_trusted:
+                continue
+            seen_trusted.add(name)
             filtered.append(tool)
         elif has_custom and name and name not in _RESERVED_TOOL_NAMES:
+            tool = scrub_custom_tool(tool)
             filtered.append(tool)
             if name not in custom_names:
                 custom_names.append(name)
-                desc = " ".join(str(getattr(tool, "description", "") or "").split())[:180]
+                desc = " ".join(str(getattr(tool, "description", "") or "").split())
                 custom_specs.append((name, desc))
     tools = filtered
     llm = ChatOllama(

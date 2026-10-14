@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONIOENCODING=utf-8 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PATH="/root/.local/bin:${PATH}" \
-    STRAZH_MAIL_URL=http://127.0.0.1:8090 \
+    STRAZH_MAIL_URL=https://127.0.0.1:8090 \
     STRAZH_MODEL=qwen2.5:3b \
     STRAZH_NUM_CTX=4096
 
@@ -14,6 +14,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        openssl \
         build-essential \
         libsqlcipher-dev \
         pkg-config \
@@ -32,6 +33,6 @@ COPY entrypoint.py /app/entrypoint.py
 RUN mkdir -p /app/data \
     && chmod 755 /app/entrypoint.py
 
-EXPOSE 8080 8090 9100 9101 9102 9103
+EXPOSE 8080 8090
 
 CMD ["python", "/app/entrypoint.py"]

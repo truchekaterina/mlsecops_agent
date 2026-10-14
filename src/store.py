@@ -259,10 +259,16 @@ def _ensure_user_mcp(conn: db_cipher.Connection) -> None:
           transport TEXT NOT NULL DEFAULT 'streamable_http',
           status TEXT NOT NULL DEFAULT 'allowed',
           created_at TEXT NOT NULL,
+          tools_hash TEXT NOT NULL DEFAULT '',
           PRIMARY KEY (email, name)
         )
         """
     )
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(user_mcp)")}
+    if "tools_hash" not in cols:
+        conn.execute(
+            "ALTER TABLE user_mcp ADD COLUMN tools_hash TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def open_turn(email: str, kind: str, phrase: str = "") -> None:

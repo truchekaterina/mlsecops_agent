@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,7 +17,7 @@ import urllib.request
 import action_hash
 import rate_limit
 
-MAIL_URL = os.environ.get("STRAZH_MAIL_URL", "http://127.0.0.1:8090").rstrip("/")
+MAIL_URL = os.environ.get("STRAZH_MAIL_URL", "https://127.0.0.1:8090").rstrip("/")
 
 
 class MailUnavailable(RuntimeError):
@@ -35,8 +36,9 @@ def _call(method: str, path: str, payload: dict | None = None, *, internal: bool
         except RuntimeError as exc:
             raise MailUnavailable(str(exc)) from exc
     req = urllib.request.Request(MAIL_URL + path, data=data, headers=headers, method=method)
+    context = _tls_context()
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=3, context=context) as resp:
             raw = resp.read().decode("utf-8")
             return resp.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -48,8 +50,16 @@ def _call(method: str, path: str, payload: dict | None = None, *, internal: bool
         return exc.code, body
     except urllib.error.URLError as exc:
         raise MailUnavailable(
-            "Почтовый сервис недоступен. Откройте его на http://127.0.0.1:8090."
+            "Почтовый сервис недоступен. Откройте его на https://127.0.0.1:8090."
         ) from exc
+
+
+def _tls_context() -> ssl.SSLContext | None:
+    if not MAIL_URL.startswith("https://"):
+        return None
+    from tls_cert import client_context
+
+    return client_context()
 
 
 def _detail(body: dict, fallback: str) -> str:

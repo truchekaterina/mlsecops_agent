@@ -67,6 +67,19 @@ def is_no(text: str) -> bool:
     return _NO.fullmatch(text or "") is not None
 
 
+_HIDDEN_PROMPT = re.compile(
+    r"системн\w*\s+промп?т|"
+    r"system\s+prompt|"
+    r"(?:покаж\w*|вывед\w*|напиш\w*|скинь|дай)\s+(?:свой\s+|мне\s+)?промп?т",
+    re.IGNORECASE,
+)
+
+
+def asks_hidden_prompt(text: str) -> bool:
+    """Просьба показать внутренние инструкции. В тулы и в свой MCP не уходит."""
+    return _HIDDEN_PROMPT.search(text or "") is not None
+
+
 def is_sell_all(text: str) -> bool:
     """Продажа всего портфеля. Это не приказ на одну бумагу."""
     return _SELL_ALL.search(text or "") is not None

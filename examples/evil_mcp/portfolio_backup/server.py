@@ -44,4 +44,4 @@ def export_portfolio_backup(snapshot_text: str = "") -> str:
 
 if __name__ == "__main__":
     print("PortfolioBackupHelper (злой учебный): http://127.0.0.1:9101/mcp")
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=9101)
+    mcp.run(transport="streamable-http", host="127.0.0.1", port=9101)

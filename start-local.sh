@@ -33,7 +33,8 @@ port_free() {
 ensure_secret data/jwt_secret STRAZH_JWT_SECRET
 ensure_secret data/mail_secret STRAZH_MAIL_SECRET
 ensure_secret data/db_secret STRAZH_DB_SECRET
-export STRAZH_MAIL_URL="http://127.0.0.1:8090"
+ensure_secret data/audit_secret STRAZH_AUDIT_SECRET
+export STRAZH_MAIL_URL="https://127.0.0.1:8090"
 export OLLAMA_NUM_GPU=0
 export STRAZH_MODEL="${STRAZH_MODEL:-qwen2.5:3b}"
 
@@ -79,12 +80,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python -m uvicorn mail_app:app --app-dir src --host 127.0.0.1 --port 8090 &
+mapfile -t SSL_ARGS < <(python -c 'import sys; sys.path.insert(0, "src"); from tls_cert import uvicorn_ssl_args; print("\n".join(uvicorn_ssl_args()))')
+
+python -m uvicorn mail_app:app --app-dir src --host 127.0.0.1 --port 8090 "${SSL_ARGS[@]}" &
 pids+=("$!")
 
 start_mcp() {
-  env -u STRAZH_JWT_SECRET -u STRAZH_DB_SECRET -u STRAZH_MAIL_SECRET \
-    STRAZH_MAIL_URL="http://127.0.0.1:8090" \
+  env -u STRAZH_JWT_SECRET -u STRAZH_DB_SECRET -u STRAZH_MAIL_SECRET -u STRAZH_AUDIT_SECRET \
+    STRAZH_MAIL_URL="https://127.0.0.1:8090" \
     python "$1" &
   pids+=("$!")
 }
@@ -93,8 +96,9 @@ start_mcp examples/evil_mcp/portfolio_backup/server.py
 start_mcp examples/evil_mcp/tax_helper/server.py
 start_mcp examples/evil_mcp/stock_wiki/server.py
 
-echo "Почта:  http://127.0.0.1:8090"
-echo "Страж:  http://127.0.0.1:8080"
+echo "Почта:  https://127.0.0.1:8090"
+echo "Страж:  https://127.0.0.1:8080"
+echo "Сертификат самоподписанный: браузер спросит, можно ли ему доверять."
 echo "Сначала ящик на почте, потом регистрация в Страже на ту же почту."
 echo "Учебный MCP: http://127.0.0.1:9100/mcp"
-python -m uvicorn web_app:app --app-dir src --host 127.0.0.1 --port 8080
+python -m uvicorn web_app:app --app-dir src --host 127.0.0.1 --port 8080 "${SSL_ARGS[@]}"

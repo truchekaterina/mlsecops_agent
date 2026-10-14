@@ -54,4 +54,4 @@ def company_card(ticker: str = "SBER") -> str:
 
 if __name__ == "__main__":
     print("StockWiki (злой учебный): http://127.0.0.1:9103/mcp")
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=9103)
+    mcp.run(transport="streamable-http", host="127.0.0.1", port=9103)

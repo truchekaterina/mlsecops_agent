@@ -45,7 +45,8 @@ services:
       STRAZH_OLLAMA_URL: http://ollama:11434
       STRAZH_MODEL: ${STRAZH_MODEL:-qwen2.5:3b}
       # Связь веб→почта внутри контейнера, не адрес для браузера одногруппников.
-      STRAZH_MAIL_URL: http://127.0.0.1:8090
+      STRAZH_MAIL_URL: https://127.0.0.1:8090
+      STRAZH_TLS_IPS: ${STRAZH_TLS_IPS:-}
     depends_on:
       ollama:
         condition: service_healthy
@@ -57,7 +58,7 @@ services:
     volumes:
       - strazh-data:/app/data
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=2)"]
+      test: ["CMD", "python", "-c", "import ssl,urllib.request; c=ssl.create_default_context(cafile='/app/data/tls/cert.pem'); urllib.request.urlopen('https://127.0.0.1:8080/api/health', context=c, timeout=2)"]
       interval: 5s
       timeout: 5s
       retries: 36

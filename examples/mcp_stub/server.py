@@ -38,4 +38,4 @@ def echo(text: str = "привет") -> str:
 
 if __name__ == "__main__":
     print("MCP-заглушка: http://127.0.0.1:9100/mcp  (в «Мои MCP» Стража)")
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=9100)
+    mcp.run(transport="streamable-http", host="127.0.0.1", port=9100)

@@ -7,7 +7,7 @@
 4. `replies.compose_chat_reply` собирает пузырь из книги, не из пересказа.
 5. Кнопка `/api/reserve/confirm` вызывает `mcp_strazh.confirm_ticket`.
 
-Кого вызывает: policy, agent_mode_a, replies, ledger.snapshot, store, user_mcp.
+Кого вызывает: policy, agent_mode_a, replies, ledger.snapshot, store, user_mcp, audit_journal.
 Кто вызывает: страница static/index.html и chat_cli.py.
 Почему отдельно от mcp_strazh: веб не должен сам списывать деньги.
 """
@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -44,20 +45,25 @@ from agent_mode_a import (  # noqa: E402
 )
 from auth import LOGIN_FAIL, TTL_HOURS, login, register, session_from_token, signing_secret  # noqa: E402
 from ledger import snapshot  # noqa: E402
-from store import open_turn, revoke_token  # noqa: E402
+from store import open_turn, revoke_token, turn_phrase  # noqa: E402
+import audit_journal  # noqa: E402
 import user_mcp  # noqa: E402
 from mcp_strazh import (  # noqa: E402
     _log,
     confirm_ticket,
     deny_ticket,
+    execute_buy,
+    execute_sell,
     set_client,
 )
 from policy import (  # noqa: E402
+    asks_hidden_prompt,
     is_no,
     is_sell_all,
     is_yes,
     parse_order,
     parse_transfer,
+    utterance_class,
     parse_custom_invoke,
     prefers_custom_mcp,
     prefers_tax_mcp,
@@ -68,7 +74,6 @@ from policy import (  # noqa: E402
     rewrites_own_book,
     several_companies,
     story_block,
-    utterance_class,
 )
 from replies import (  # noqa: E402
     OTHER_USER_REPLY,
@@ -168,6 +173,33 @@ def _fresh_chat(email: str) -> None:
     _history[email] = []
 
 
+def _with_mcp_review(email: str, text: str) -> str:
+    """Если команды MCP сменились, человек видит это в том же ответе."""
+    names = user_mcp.review_names(email)
+    if not names:
+        return text
+    note = (
+        "Сервер MCP сменил команды. Модель их не видит, пока не подтвердите в «Мои MCP»: "
+        + ", ".join(names)
+        + "."
+    )
+    if note in text:
+        return text
+    return f"{note} {text}"
+
+
+async def _watch_mcp(email: str) -> None:
+    """Перед ходом сверить отпечаток. Изменившийся сервер из агента убирается."""
+    if not user_mcp.has_allowed(email):
+        return
+    changed = await user_mcp.refresh_consent(email)
+    if not changed:
+        return
+    await _drop_agent(email)
+    for name in changed:
+        audit_journal.record(email, "mcp_review", {"name": name})
+
+
 def _pack(session: dict, text: str, tools: list[str]) -> dict:
     """Ответ чата: текст, снимок книги и заявка. Поля tools в JSON нет."""
     acc = snapshot(session["email"])
@@ -226,6 +258,7 @@ def _set_session_cookie(resp: JSONResponse, token: str) -> JSONResponse:
         "strazh_token",
         token,
         httponly=True,
+        secure=True,
         samesite="lax",
         max_age=TTL_HOURS * 3600,
         path="/",
@@ -270,6 +303,7 @@ async def api_register(body: RegisterIn):
         user = register(body.name, body.email, body.password)
         session = login(user["email"], body.password)
         _fresh_chat(session["email"])
+        audit_journal.record(session["email"], "login", {"via": "register"})
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     resp = JSONResponse(
@@ -290,6 +324,7 @@ async def api_login(body: LoginIn, request: Request):
     try:
         session = login(body.login, body.password)
         _fresh_chat(session["email"])
+        audit_journal.record(session["email"], "login", {"via": "login"})
     except (KeyError, PermissionError):
         _login_failed(ip)
         raise HTTPException(401, LOGIN_FAIL) from None
@@ -315,7 +350,7 @@ async def api_logout(request: Request):
         except (ValueError, RuntimeError):
             pass
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie("strazh_token", path="/")
+    resp.delete_cookie("strazh_token", path="/", secure=True, httponly=True, samesite="lax")
     return resp
 
 
@@ -324,8 +359,14 @@ async def api_mcp_list(request: Request):
     from mcp_url_guard import builtin_stub_url, teaching_mcp_catalog
 
     session = _bearer(request)
+    await _watch_mcp(session["email"])
+    items = []
+    for row in user_mcp.list_mcp(session["email"]):
+        shown = dict(row)
+        shown.pop("tools_hash", None)
+        items.append(shown)
     return {
-        "items": user_mcp.list_mcp(session["email"]),
+        "items": items,
         "stub_url": builtin_stub_url(),
         "stub_hint": (
             "Учебные MCP на :9100–:9103. Свой сервер: "
@@ -337,12 +378,18 @@ async def api_mcp_list(request: Request):
 
 @app.post("/api/mcp")
 async def api_mcp_add(body: McpIn, request: Request):
+    from mcp_tools_probe import tool_fingerprint
+
     session = _bearer(request)
     try:
-        item = user_mcp.add_mcp(session["email"], body.name, body.url, body.transport)
+        digest = await tool_fingerprint(body.url, body.transport)
+        item = user_mcp.add_mcp(
+            session["email"], body.name, body.url, body.transport, digest
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await _drop_agent(session["email"])
+    item.pop("tools_hash", None)
     return item
 
 
@@ -355,6 +402,28 @@ async def api_mcp_delete(name: str, request: Request):
         raise HTTPException(404, str(exc)) from exc
     await _drop_agent(session["email"])
     return {"ok": True}
+
+
+@app.post("/api/mcp/{name}/confirm")
+async def api_mcp_confirm(name: str, request: Request):
+    """Человек снова разрешает команды, если их отпечаток изменился."""
+    from mcp_tools_probe import tool_fingerprint
+
+    session = _bearer(request)
+    row = user_mcp.get_mcp(session["email"], name)
+    if not row:
+        raise HTTPException(404, "Такого MCP нет.")
+    try:
+        digest = await tool_fingerprint(
+            str(row["url"]), str(row.get("transport") or "streamable_http")
+        )
+        item = user_mcp.accept_tools(session["email"], name, digest)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await _drop_agent(session["email"])
+    audit_journal.record(session["email"], "mcp_confirm", {"name": name})
+    item.pop("tools_hash", None)
+    return item
 
 
 @app.get("/api/mcp/{name}/tools")
@@ -444,6 +513,45 @@ async def _say(session: dict, user_text: str) -> dict:
     return _note(session, text)
 
 
+def _order_ticket(session: dict, text: str, used: list[str]) -> str | None:
+    """Явный приказ на одну бумагу, а тул сделки агент не вызвал — заявка всё равно ставится."""
+    kind = utterance_class(text)
+    if kind not in {"buy", "sell"}:
+        return None
+    if turn_phrase(session["email"]) != text:
+        return None
+    order = parse_order(text)
+    if order.get("error"):
+        return None
+    if kind == "buy" and "execute_buy" in used:
+        return None
+    if kind == "sell" and "execute_sell" in used:
+        return None
+    pending = snapshot(session["email"]).get("pending_reserve") or {}
+    if pending.get("id"):
+        return str(pending.get("prompt") or "")
+    shares = int(order.get("shares") or 1)
+    ticker = str(order["ticker"])
+    raw = execute_sell(ticker, shares) if kind == "sell" else execute_buy(ticker, shares)
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else {}
+    except json.JSONDecodeError:
+        data = {}
+    if not isinstance(data, dict):
+        return None
+    audit_journal.record(
+        session["email"],
+        "tool",
+        {"name": "execute_sell" if kind == "sell" else "execute_buy", "status": data.get("status")},
+    )
+    if data.get("status") in {"NEED_BUTTON", "NEED_RESERVE_CONFIRM"}:
+        fresh = snapshot(session["email"]).get("pending_reserve") or {}
+        return str(fresh.get("prompt") or data.get("message") or "")
+    if data.get("status") == "ERROR":
+        return str(data.get("message") or data.get("error") or "Заявка не создана.")
+    return None
+
+
 def _open_money_turn(session: dict, message: str) -> str | None:
     """Запоминает фразу покупки или продажи. Тул вызовет агент и сверит бумагу с ней."""
     kind = utterance_class(message)
@@ -469,6 +577,7 @@ async def api_chat(body: ChatIn, request: Request):
 async def _chat_locked(session: dict, body: ChatIn):
     """Конвейер фразы: фильтр, цена с биржи либо агент, затем текст из книги."""
     _bind_client(session)
+    await _watch_mcp(session["email"])
     hist = _history.setdefault(session["email"], [])
     text = body.message.strip()
     hist.append({"role": "user", "content": text})
@@ -491,11 +600,21 @@ async def _chat_locked(session: dict, body: ChatIn):
         return _note(session, reply)
     if is_no(text):
         if pending:
-            deny_ticket(str(pending.get("id") or ""))
+            ticket_id = str(pending.get("id") or "")
+            deny_ticket(ticket_id)
+            audit_journal.record(
+                session["email"], "button", {"action": "deny", "via": "chat", "ticket": ticket_id}
+            )
             return _note(session, "Заявка отменена, счёт не менялся.")
         return _note(session, "Открытой заявки нет.")
     if rewrites_own_book(text):
         return _note(session, refused_book_change(snapshot(session["email"])))
+    if asks_hidden_prompt(text):
+        return _note(
+            session,
+            "Внутренние инструкции не показываю. "
+            "Могу показать счёт, портфель или цену с Мосбиржи.",
+        )
     # open_turn записывает фразу. Тул вызывает агент, сервер сверяет бумагу и число.
     agent_order = is_sell_all(text) or parse_transfer(text) is not None
     several = several_companies(text)
@@ -539,9 +658,12 @@ async def _chat_locked(session: dict, body: ChatIn):
     if user_mcp.has_allowed(session["email"]) and not custom_tools and failed:
         return _note(
             session,
-            "Кастомный MCP в профиле есть, но сейчас недоступен: "
-            + "; ".join(failed[:3])
-            + ". Проверьте, что сервер запущен, и URL (не localhost).",
+            _with_mcp_review(
+                session["email"],
+                "Кастомный MCP в профиле есть, но сейчас недоступен: "
+                + "; ".join(failed[:3])
+                + ". Проверьте, что сервер запущен, и URL (не localhost).",
+            ),
         )
     agent_text = text
     # Легенда 2: подсказать модели реальные поля сессии, чтобы не выдумывала client@example.com.
@@ -579,22 +701,33 @@ async def _chat_locked(session: dict, body: ChatIn):
             timeout=_AGENT_TIMEOUT_SECONDS,
         )
     except TimeoutError:
+        audit_journal.record(session["email"], "invoke", {"step": "agent", "error": "timeout"})
         return _note(
             session,
-            "Агент не успел завершить запрос за 3 минуты. "
-            "Проверьте состояние счёта перед повтором.",
+            _with_mcp_review(
+                session["email"],
+                "Агент не успел завершить запрос за 3 минуты. "
+                "Проверьте состояние счёта перед повтором.",
+            ),
         )
     except Exception as exc:
         name = type(exc).__name__
+        audit_journal.record(session["email"], "invoke", {"step": "agent", "error": name})
         if "Recursion" in name or "recursion" in str(exc).lower():
             return _note(
                 session,
-                "Агент остановился: слишком много шагов (часто из‑за prompt injection в MCP). "
-                "Повторите короче: «вызови export_portfolio_backup» или «вызови ping».",
+                _with_mcp_review(
+                    session["email"],
+                    "Агент остановился: слишком много шагов (часто из‑за prompt injection в MCP). "
+                    "Повторите короче: «вызови export_portfolio_backup» или «вызови ping».",
+                ),
             )
         return _note(
             session,
-            "Модель сейчас не ответила. Подождите полминуты и повторите запрос.",
+            _with_mcp_review(
+                session["email"],
+                "Модель сейчас не ответила. Подождите полминуты и повторите запрос.",
+            ),
         )
     used = tools_used(result)
     acc = snapshot(session["email"])
@@ -613,6 +746,11 @@ async def _chat_locked(session: dict, body: ChatIn):
         earlier=_earlier_user_lines(hist),
     )
     answer = await _readable_external(answer, used, payloads, plain)
+    forced = _order_ticket(session, text, used)
+    if forced:
+        answer = forced
+    answer = _with_mcp_review(session["email"], answer)
+    audit_journal.record_agent_result(session["email"], result, answer)
     if not used and custom_tools and not (model_text or "").strip():
         legend = {
             "company_card",
@@ -672,6 +810,9 @@ async def api_reserve_confirm(body: TicketIn, request: Request):
     session = _bearer(request)
     async with await _hold_user(session["email"]):
         _bind_client(session)
+        audit_journal.record(
+            session["email"], "button", {"action": "confirm", "ticket": body.id}
+        )
         return _finish_ticket(session, confirm_ticket(body.id))
 
 
@@ -680,6 +821,9 @@ async def api_reserve_deny(body: TicketIn, request: Request):
     session = _bearer(request)
     async with await _hold_user(session["email"]):
         _bind_client(session)
+        audit_journal.record(
+            session["email"], "button", {"action": "deny", "ticket": body.id}
+        )
         payload = deny_ticket(body.id)
         if payload.get("status") != "CANCELLED":
             raise HTTPException(400, payload.get("error") or "Заявка не отменена")

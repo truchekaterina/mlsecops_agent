@@ -16,6 +16,7 @@ DATA = Path("/app/data")
 SECRET_FILE = DATA / "jwt_secret"
 MAIL_SECRET_FILE = DATA / "mail_secret"
 DB_SECRET_FILE = DATA / "db_secret"
+AUDIT_SECRET_FILE = DATA / "audit_secret"
 DEMO_SECRET = "strazh-demo-hs256"
 
 
@@ -25,6 +26,8 @@ def ensure_jwt() -> str:
     if len(existing) < 16 or existing == DEMO_SECRET:
         existing = secrets.token_urlsafe(32)
         SECRET_FILE.write_text(existing, encoding="ascii")
+    if SECRET_FILE.exists():
+        os.chmod(SECRET_FILE, 0o600)
     return existing
 
 
@@ -44,6 +47,24 @@ def ensure_db_secret() -> str:
     return existing
 
 
+def ensure_audit_secret() -> str:
+    """Ключ журнала решений отдельно от ключа книги."""
+    DATA.mkdir(parents=True, exist_ok=True)
+    current = os.environ.get("STRAZH_AUDIT_SECRET", "").strip()
+    if len(current) >= 16:
+        return current
+    if current:
+        raise SystemExit("STRAZH_AUDIT_SECRET короче 16 символов. Журнал не стартует.")
+    existing = (
+        AUDIT_SECRET_FILE.read_text(encoding="ascii").strip() if AUDIT_SECRET_FILE.exists() else ""
+    )
+    if len(existing) < 16:
+        existing = secrets.token_urlsafe(32)
+        AUDIT_SECRET_FILE.write_text(existing, encoding="ascii")
+    os.chmod(AUDIT_SECRET_FILE, 0o600)
+    return existing
+
+
 def ensure_mail_secret() -> str:
     """Секрет почты отдельно от JWT. В репозиторий не кладётся."""
     DATA.mkdir(parents=True, exist_ok=True)
@@ -56,6 +77,8 @@ def ensure_mail_secret() -> str:
     if len(existing) < 16:
         existing = secrets.token_urlsafe(32)
         MAIL_SECRET_FILE.write_text(existing, encoding="ascii")
+    if MAIL_SECRET_FILE.exists():
+        os.chmod(MAIL_SECRET_FILE, 0o600)
     return existing
 
 
@@ -104,9 +127,15 @@ def ensure_model(url: str, model: str) -> None:
 def _ensure_attacker_mailbox(mail_url: str, mail_secret: str) -> None:
     """Учебный ящик злоумышленника: после легенды 2 входящих от Стража быть не должно."""
     base = mail_url.rstrip("/")
+    context = None
+    if base.startswith("https://"):
+        sys.path.insert(0, "/app/src")
+        from tls_cert import client_context
+
+        context = client_context()
     for _ in range(60):
         try:
-            urllib.request.urlopen(base + "/api/health", timeout=2).read()
+            urllib.request.urlopen(base + "/api/health", timeout=2, context=context).read()
             break
         except (urllib.error.URLError, TimeoutError, OSError):
             time.sleep(0.5)
@@ -114,7 +143,7 @@ def _ensure_attacker_mailbox(mail_url: str, mail_secret: str) -> None:
         print("Почта не поднялась — ящик attacker@mail.ru не создан.", flush=True)
         return
     payload = json.dumps(
-        {"email": "attacker@mail.ru", "password": "AttackerDemo1!"}
+        {"email": "attacker@mail.ru", "password": secrets.token_urlsafe(18)}
     ).encode()
     req = urllib.request.Request(
         base + "/api/internal/mailbox",
@@ -126,10 +155,10 @@ def _ensure_attacker_mailbox(mail_url: str, mail_secret: str) -> None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5, context=context) as resp:
             resp.read()
         print(
-            "Учебный ящик attacker@mail.ru готов (пароль AttackerDemo1!). "
+            "Учебный ящик attacker@mail.ru готов. Пароль в лог не пишется. "
             "После легенды 2 входящих от Стража быть не должно.",
             flush=True,
         )
@@ -148,7 +177,12 @@ def main() -> None:
     os.environ["STRAZH_JWT_SECRET"] = ensure_jwt()
     os.environ["STRAZH_MAIL_SECRET"] = ensure_mail_secret()
     os.environ["STRAZH_DB_SECRET"] = ensure_db_secret()
-    os.environ.setdefault("STRAZH_MAIL_URL", "http://127.0.0.1:8090")
+    os.environ["STRAZH_AUDIT_SECRET"] = ensure_audit_secret()
+    sys.path.insert(0, "/app/src")
+    from tls_cert import uvicorn_ssl_args
+
+    ssl_args = uvicorn_ssl_args()
+    os.environ.setdefault("STRAZH_MAIL_URL", "https://127.0.0.1:8090")
     ollama = os.environ.get("STRAZH_OLLAMA_URL", "http://127.0.0.1:11434")
     model = os.environ.get("STRAZH_MODEL", "qwen2.5:3b")
     print("Жду Ollama...", flush=True)
@@ -160,7 +194,7 @@ def main() -> None:
     # 0.0.0.0 — интерфейсы контейнера, иначе проброс Docker не доходит до почты.
     # На хосте compose публикует 38480→8080 и 38490→8090 на все интерфейсы (LAN).
     mail = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "mail_app:app", "--host", "0.0.0.0", "--port", "8090"],
+        [sys.executable, "-m", "uvicorn", "mail_app:app", "--host", "0.0.0.0", "--port", "8090", *ssl_args],
         cwd=src,
         env=env,
     )
@@ -198,9 +232,10 @@ def main() -> None:
             for key, value in env.items()
             if not key.startswith("STRAZH_JWT")
             and not key.startswith("STRAZH_DB")
+            and not key.startswith("STRAZH_AUDIT")
             and key != "STRAZH_MAIL_SECRET"
         }
-        mcp_env["STRAZH_MAIL_URL"] = env.get("STRAZH_MAIL_URL", "http://127.0.0.1:8090")
+        mcp_env["STRAZH_MAIL_URL"] = env.get("STRAZH_MAIL_URL", "https://127.0.0.1:8090")
         for script, url, label in teaching_scripts:
             if not script.is_file():
                 print(f"Учебный MCP не найден ({label}): {script}", flush=True)
@@ -209,10 +244,10 @@ def main() -> None:
                 subprocess.Popen([sys.executable, str(script)], cwd="/app", env=mcp_env)
             )
             print(f"Учебный MCP ({label}): {url}", flush=True)
-    _ensure_attacker_mailbox(env.get("STRAZH_MAIL_URL", "http://127.0.0.1:8090"), env["STRAZH_MAIL_SECRET"])
+    _ensure_attacker_mailbox(env.get("STRAZH_MAIL_URL", "https://127.0.0.1:8090"), env["STRAZH_MAIL_SECRET"])
     try:
         web = subprocess.run(
-            [sys.executable, "-m", "uvicorn", "web_app:app", "--host", "0.0.0.0", "--port", "8080"],
+            [sys.executable, "-m", "uvicorn", "web_app:app", "--host", "0.0.0.0", "--port", "8080", *ssl_args],
             cwd=src,
             env=env,
             check=False,

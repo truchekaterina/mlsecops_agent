@@ -129,6 +129,9 @@ def _session(request: Request) -> str:
 
 
 def _internal(request: Request) -> None:
+    host = request.client.host if request.client else ""
+    if host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(404, "Нет такого адреса")
     token = request.headers.get("x-mail-token") or ""
     if not hmac.compare_digest(token, SECRET):
         raise HTTPException(403, "нет доступа к почтовому сервису")
@@ -157,7 +160,14 @@ async def api_register(body: MailboxIn, request: Request):
         raise HTTPException(400, str(exc)) from exc
     token = _issue(created["email"])
     resp = JSONResponse({"email": created["email"], "token": token})
-    resp.set_cookie("mail_token", token, httponly=True, samesite="lax", max_age=TTL_HOURS * 3600)
+    resp.set_cookie(
+        "mail_token",
+        token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=TTL_HOURS * 3600,
+    )
     return resp
 
 
@@ -181,14 +191,21 @@ async def api_login(body: LoginIn, request: Request):
             )
     token = _issue(box["email"])
     resp = JSONResponse({"email": box["email"], "token": token})
-    resp.set_cookie("mail_token", token, httponly=True, samesite="lax", max_age=TTL_HOURS * 3600)
+    resp.set_cookie(
+        "mail_token",
+        token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=TTL_HOURS * 3600,
+    )
     return resp
 
 
 @app.post("/api/logout")
 async def api_logout():
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie("mail_token")
+    resp.delete_cookie("mail_token", secure=True, httponly=True, samesite="lax")
     return resp
 
 

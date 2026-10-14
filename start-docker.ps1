@@ -12,7 +12,7 @@ Set-Location $PSScriptRoot
 
 function Test-StrazhHealth {
     try {
-        $r = Invoke-WebRequest -Uri "http://127.0.0.1:38480/api/health" -UseBasicParsing -TimeoutSec 2
+        $r = Invoke-WebRequest -Uri "https://127.0.0.1:38480/api/health" -UseBasicParsing -TimeoutSec 2 -SkipCertificateCheck
         return ($r.StatusCode -eq 200)
     } catch {
         return $false
@@ -32,15 +32,16 @@ function Get-LanIPv4 {
 function Write-Urls {
     Write-Host ""
     Write-Host "У этого компьютера:"
-    Write-Host "  Страж:  http://127.0.0.1:38480"
-    Write-Host "  Почта:  http://127.0.0.1:38490"
+    Write-Host "  Страж:  https://127.0.0.1:38480"
+    Write-Host "  Почта:  https://127.0.0.1:38490"
+    Write-Host "  Сертификат самоподписанный: браузер один раз спросит доверие."
     Write-Host ""
     $ips = @(Get-LanIPv4)
     if ($ips.Count -gt 0) {
         Write-Host "Одногруппникам в той же Wi‑Fi (скопируйте как есть):"
         foreach ($ip in $ips) {
-            Write-Host "  Страж:  http://${ip}:38480"
-            Write-Host "  Почта:  http://${ip}:38490"
+            Write-Host "  Страж:  https://${ip}:38480"
+            Write-Host "  Почта:  https://${ip}:38490"
         }
         Write-Host ""
         Write-Host "IP выдаёт Wi‑Fi (DHCP), порты всегда 38480 и 38490."
@@ -58,7 +59,7 @@ function Write-Urls {
 
 if ($Command -eq "urls") {
     if (-not (Test-StrazhHealth)) {
-        Write-Error "Стенд не отвечает на http://127.0.0.1:38480/api/health. Сначала: .\start-docker.ps1"
+        Write-Error "Стенд не отвечает на https://127.0.0.1:38480/api/health. Сначала: .\start-docker.ps1"
     }
     Write-Host "Стенд уже работает."
     Write-Urls
@@ -74,11 +75,13 @@ try {
     Write-Error "Нужен Docker Compose v2 (команда: docker compose)."
 }
 
+$ips = @(Get-LanIPv4)
+if ($ips.Count -gt 0) { $env:STRAZH_TLS_IPS = ($ips -join ",") }
 Write-Host "Собираю образ и поднимаю стек."
 Write-Host "Первый раз качает qwen2.5:3b (~2 ГБ) — это может занять 5–15 минут."
 docker compose up -d --build
 
-Write-Host "Жду http://127.0.0.1:38480/api/health ..."
+Write-Host "Жду https://127.0.0.1:38480/api/health ..."
 $ok = $false
 for ($i = 0; $i -lt 300; $i++) {
     if (Test-StrazhHealth) { $ok = $true; break }

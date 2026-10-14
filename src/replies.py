@@ -43,7 +43,7 @@ def refused_book_change(snap: dict) -> str:
 
 def spoken_reply(model_text: str, snap: dict) -> str:
     """Живой текст модели. Ложь про сделку или пустой портфель заменяется книгой."""
-    text = _strip_tool_injection(model_text or "").strip()
+    text = _public_tool_text(_strip_tool_injection(model_text or "").strip())
     if _CLAIM_RE.search(text):
         return refused_book_change(snap) + "\n" + format_portfolio(snap)
     if _EMPTY_PORTFOLIO.search(text):
@@ -358,6 +358,10 @@ _NOT_A_NAME = frozenset(
         "работы", "работу", "примера", "пример", "сервиса", "сервис", "сервису",
         "промпт", "промпта", "промту", "промт", "промта", "пропт", "пропта",
         "системный", "системного", "системную",
+        "определений", "определения", "определение", "просмотра", "просмотр",
+        "просмотре", "выполни", "выполните", "выполнить", "функций", "функции",
+        "функция", "названий", "названия", "доступных", "переданных",
+        "перечисли", "опиши", "опишите", "чтение", "чтения",
     }
 )
 
@@ -510,6 +514,31 @@ def _market_reply(used: list[str], payloads: list[dict], snap: dict, asked_rates
     return None
 
 
+_STACK_LEAK = re.compile(
+    r"pydantic\.dev|ValidationError|Traceback \(most recent|v/missing",
+    re.IGNORECASE,
+)
+
+
+def _public_tool_text(text: str) -> str:
+    """Служебный текст ошибки не показываем: в нём версия библиотеки и ссылка."""
+    if _STACK_LEAK.search(text or ""):
+        return "Инструмент не выполнился. Повторите запрос и назовите, что именно вызвать."
+    return text
+
+
+def _exchange_instead_of_tool_price(text: str) -> str | None:
+    """Чужой MCP не назначает цену каталога. В пузыре цифра с Мосбиржи."""
+    from policy import companies_in
+
+    if not re.search(r"\d[\d\s]*(?:[.,]\d+)?\s*(?:₽|руб)", text or "", re.IGNORECASE):
+        return None
+    known = {code for code in companies_in(text) if code != "UNKNOWN_ALFA"}
+    if not known:
+        return None
+    return format_exchange_quotes(text)
+
+
 def _external_tool_reply(
     used: list[str],
     payloads: list[dict],
@@ -521,7 +550,7 @@ def _external_tool_reply(
     if not custom_used:
         return None
     for raw in reversed(tool_texts or []):
-        text = _strip_tool_injection(str(raw or ""))
+        text = _public_tool_text(_strip_tool_injection(str(raw or "")))
         if text:
             return text
     for payload in reversed(payloads):
@@ -655,10 +684,17 @@ def compose_chat_reply(
 
     external = _external_tool_reply(used, payloads, tool_texts, model_text)
     if external:
-        return external
+        grounded = _exchange_instead_of_tool_price(external)
+        return grounded or external
 
     if "notify_user" in used_set:
-        notify = payload if isinstance(payload, dict) else None
+        notify = None
+        for row in reversed(payloads):
+            if str(row.get("_tool") or "") == "notify_user":
+                notify = row
+                break
+        if notify is None and isinstance(payload, dict) and str(payload.get("_tool") or "") == "notify_user":
+            notify = payload
         if notify is None:
             for raw in reversed(tool_texts or []):
                 try:
