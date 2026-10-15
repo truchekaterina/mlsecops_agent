@@ -257,10 +257,16 @@ async def build_agent(session: dict | None = None):
         num_ctx=NUM_CTX,
         keep_alive="30m",
     )
+    from harness import ToolGate
+
+    allowed = {str(getattr(tool, "name", "") or "") for tool in tools} & set(TRUSTED_TOOL_NAMES)
     agent = create_agent(
         llm,
         tools,
         system_prompt=_system_prompt(session, custom_specs),
+        middleware=[
+            ToolGate(session_email, allowed, set(custom_names)),
+        ],
     )
     meta = {
         "custom_loaded": [str(r.get("name") or "") for r in loaded_custom],
